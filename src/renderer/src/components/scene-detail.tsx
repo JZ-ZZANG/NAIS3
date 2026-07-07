@@ -1,4 +1,4 @@
-import { ArrowLeft, Minus, Plus, Star, Trash2 } from 'lucide-react'
+import { ArrowLeft, Minus, Play, Plus, Star, Trash2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { Scene } from '@shared/types'
 import { imageUrl } from '../lib/constants'
@@ -21,6 +21,7 @@ export function SceneDetail({ scene }: { scene: Scene }): React.JSX.Element {
   const loadImages = useScenesStore((s) => s.loadImages)
   const toggleFavorite = useScenesStore((s) => s.toggleFavorite)
   const deleteImage = useScenesStore((s) => s.deleteImage)
+  const generateOne = useScenesStore((s) => s.generateOne)
 
   const source = useGenerationStore((s) => s.source)
   const sentinelRef = useRef<HTMLDivElement>(null)
@@ -63,6 +64,16 @@ export function SceneDetail({ scene }: { scene: Scene }): React.JSX.Element {
           height={scene.height}
           onPick={(width, height) => void update(scene.id, { width, height })}
         />
+        {/* 바로 생성 — 예약 없이 이 씬 1장 (NAIS2식) */}
+        <Button
+          size="sm"
+          variant="accent"
+          className="gap-1"
+          title="이 씬 1장 바로 생성"
+          onClick={() => void generateOne(scene.id)}
+        >
+          <Play size={13} /> 생성
+        </Button>
         {/* 예약 +/- */}
         <div className="flex items-center gap-0.5 rounded-full bg-surface-2 p-0.5">
           <button
@@ -92,7 +103,7 @@ export function SceneDetail({ scene }: { scene: Scene }): React.JSX.Element {
       )}
 
       {/* 스크롤 영역: 프롬프트 + 생성 이미지. scrollbar-gutter로 스크롤바 등장/소멸 시 밀림 방지 */}
-      <div className="min-h-0 flex-1 overflow-y-auto p-3 [scrollbar-gutter:stable_both-edges]">
+      <div className="min-h-0 flex-1 overflow-y-auto p-3 no-scrollbar">
         <div className="grid gap-2">
           <PromptEditor
             value={scene.prompt}
@@ -136,7 +147,11 @@ export function SceneDetail({ scene }: { scene: Scene }): React.JSX.Element {
         ) : (
           <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
             {images.map((img, i) => (
-              <ImageContextMenu key={img.id} filePath={img.filePath}>
+              <ImageContextMenu
+                key={img.id}
+                filePath={img.filePath}
+                onDelete={() => void deleteImage(img.id)}
+              >
               <div
                 className="group relative overflow-hidden rounded-md bg-surface-2"
                 style={{ aspectRatio: `${scene.width} / ${scene.height}` }}

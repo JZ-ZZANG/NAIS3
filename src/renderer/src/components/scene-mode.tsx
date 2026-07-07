@@ -35,7 +35,7 @@ import {
 } from '@dnd-kit/core'
 import { arrayMove, rectSortingStrategy, SortableContext, useSortable } from '@dnd-kit/sortable'
 import { AnimatePresence, motion } from 'motion/react'
-import { memo, useEffect, useMemo, useState, type CSSProperties } from 'react'
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import type {
   CharacterCard,
   CharRefItem,
@@ -185,6 +185,9 @@ function IconBtn({
   )
 }
 
+// 씬 그리드 스크롤 위치 — 다른 페이지/씬 상세를 다녀와도 위치 복원 (언마운트돼도 유지)
+let savedGridScroll = 0
+
 function SceneGrid(): React.JSX.Element {
   const scenes = useScenesStore((s) => s.scenes)
   const activePresetId = useScenesStore((s) => s.activePresetId)
@@ -208,6 +211,16 @@ function SceneGrid(): React.JSX.Element {
     void loadGenerationOptions()
     void loadSequenceEntries()
   }, [loadGenerationOptions, loadSequenceEntries])
+
+  // 스크롤 위치 복원 — 마운트 직후 + 씬 목록이 늦게 로드된 경우 한 번 더
+  const scrollRef = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = savedGridScroll
+  }, [])
+  useEffect(() => {
+    const el = scrollRef.current
+    if (el && savedGridScroll > 0 && el.scrollTop === 0) el.scrollTop = savedGridScroll
+  }, [scenes.length])
 
   // 드래그 재정렬 (5px 이동해야 시작 — 클릭과 구분).
   // DragOverlay 사용: 드래그 중엔 가벼운 클론이 커서를 따라가고 원본은 숨겨 프레임 저하 방지
@@ -373,7 +386,13 @@ function SceneGrid(): React.JSX.Element {
       </AnimatePresence>
 
       {/* 카드 그리드 (열 수만큼 폭에 꽉 차게). scrollbar-gutter로 스크롤바 등장 시 밀림 방지 */}
-      <div className="min-h-0 flex-1 overflow-y-auto p-3 [scrollbar-gutter:stable_both-edges]">
+      <div
+        ref={scrollRef}
+        onScroll={(e) => {
+          savedGridScroll = e.currentTarget.scrollTop
+        }}
+        className="min-h-0 flex-1 overflow-y-auto p-3 no-scrollbar"
+      >
         <DndContext
           sensors={sensors}
           collisionDetection={closestCenter}
@@ -843,22 +862,28 @@ function CharacterSelectionList({
         <SelectionSummary selected={selected} items={items} labelFor={characterLabel} onRemove={toggle} />
       )}
       <div className="max-h-56 overflow-y-auto rounded-md border border-line bg-surface p-1">
-        {rows.map((row) =>
-          row.type === 'folder' ? (
-            <button
-              key={`f-${row.folder.id}`}
-              className="mt-1 flex h-8 w-full items-center gap-1.5 rounded-md bg-surface-2 px-2 text-left text-[12px] font-medium text-muted first:mt-0 hover:text-ink"
-              style={
-                row.folder.color
-                  ? { backgroundColor: `color-mix(in srgb, ${row.folder.color} 22%, var(--surface-2))` }
-                  : undefined
-              }
-              onClick={() => onToggleFolder(row.folder.id)}
-            >
-              {row.folder.collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
-              <span className="truncate">{row.folder.name}</span>
-            </button>
-          ) : row.hidden ? null : (
+        {rows.map((row) => {
+          if (row.type === 'folder') {
+            return (
+              <button
+                key={`f-${row.folder.id}`}
+                className="mt-1 flex h-8 w-full items-center gap-1.5 rounded-md bg-surface-2 px-2 text-left text-[12px] font-medium text-muted first:mt-0 hover:text-ink"
+                style={
+                  row.folder.color
+                    ? {
+                        backgroundColor: `color-mix(in srgb, ${row.folder.color} 22%, var(--surface-2))`
+                      }
+                    : undefined
+                }
+                onClick={() => onToggleFolder(row.folder.id)}
+              >
+                {row.folder.collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+                <span className="truncate">{row.folder.name}</span>
+              </button>
+            )
+          }
+          if (row.type === 'divider' || row.hidden) return null
+          return (
             <button
               key={row.item.id}
               onClick={() => toggle(row.item.id)}
@@ -888,7 +913,7 @@ function CharacterSelectionList({
               </span>
             </button>
           )
-        )}
+        })}
         {rows.length === 0 && <p className="px-2 py-2 text-[12px] text-faint">No items.</p>}
       </div>
     </div>
@@ -949,22 +974,28 @@ function RefSelectionList<T extends CharRefItem | VibeItem>({
         <SelectionSummary selected={selected} items={items} labelFor={labelFor} onRemove={toggle} />
       )}
       <div className="grid max-h-40 grid-cols-2 gap-1 overflow-y-auto rounded-md border border-line bg-surface p-1">
-        {rows.map((row) =>
-          row.type === 'folder' ? (
-            <button
-              key={`f-${row.folder.id}`}
-              className="col-span-2 mt-1 flex h-8 w-full items-center gap-1.5 rounded-md bg-surface-2 px-2 text-left text-[12px] font-medium text-muted first:mt-0 hover:text-ink"
-              style={
-                row.folder.color
-                  ? { backgroundColor: `color-mix(in srgb, ${row.folder.color} 22%, var(--surface-2))` }
-                  : undefined
-              }
-              onClick={() => onToggleFolder(row.folder.id)}
-            >
-              {row.folder.collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
-              <span className="truncate">{row.folder.name}</span>
-            </button>
-          ) : row.hidden ? null : (
+        {rows.map((row) => {
+          if (row.type === 'folder') {
+            return (
+              <button
+                key={`f-${row.folder.id}`}
+                className="col-span-2 mt-1 flex h-8 w-full items-center gap-1.5 rounded-md bg-surface-2 px-2 text-left text-[12px] font-medium text-muted first:mt-0 hover:text-ink"
+                style={
+                  row.folder.color
+                    ? {
+                        backgroundColor: `color-mix(in srgb, ${row.folder.color} 22%, var(--surface-2))`
+                      }
+                    : undefined
+                }
+                onClick={() => onToggleFolder(row.folder.id)}
+              >
+                {row.folder.collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+                <span className="truncate">{row.folder.name}</span>
+              </button>
+            )
+          }
+          if (row.type === 'divider' || row.hidden) return null
+          return (
             <button
               key={row.item.id}
               onClick={() => toggle(row.item.id)}
@@ -979,14 +1010,18 @@ function RefSelectionList<T extends CharRefItem | VibeItem>({
                 alt=""
               />
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-[12.5px] font-medium">{labelFor(row.item)}</span>
+                <span className="block truncate text-[12.5px] font-medium">
+                  {labelFor(row.item)}
+                </span>
                 {'refType' in row.item && (
-                  <span className="block truncate text-[11px] text-faint">{row.item.refType}</span>
+                  <span className="block truncate text-[11px] text-faint">
+                    {row.item.refType}
+                  </span>
                 )}
               </span>
             </button>
           )
-        )}
+        })}
         {rows.length === 0 && (
           <p className="col-span-2 px-2 py-2 text-[12px] text-faint">No items.</p>
         )}

@@ -17,11 +17,15 @@ export function PreviewPane(): React.JSX.Element {
   const generating = queue?.items.some((i) => i.state === 'generating') ?? false
   const preparing = generating && !progress // 스텝 진행 전 = 준비 중(인코딩 등)
 
-  const src = viewingFilePath
-    ? imageUrl(viewingFilePath)
-    : previewPng
+  // 생성 중엔 스트리밍 프레임 우선 — 배치 2장째부터 직전 완성작(viewingFilePath)에 가려지던 문제
+  const src =
+    generating && previewPng
       ? `data:image/png;base64,${previewPng}`
-      : null
+      : viewingFilePath
+        ? imageUrl(viewingFilePath)
+        : previewPng
+          ? `data:image/png;base64,${previewPng}`
+          : null
 
   const showMeta = useMetadataStore((s) => s.show)
   const seedLocked = useGenerationStore((s) => s.seedLocked)
@@ -58,7 +62,11 @@ export function PreviewPane(): React.JSX.Element {
         dragOver ? 'border-accent' : 'border-line'
       )}
       onDragOver={(e) => {
-        if (e.dataTransfer.types.includes('Files')) {
+        // 외부 파일 또는 히스토리 썸네일(내부 드래그) 둘 다 허용
+        if (
+          e.dataTransfer.types.includes('Files') ||
+          e.dataTransfer.types.includes('nais/file-path')
+        ) {
           e.preventDefault()
           setDragOver(true)
         }
@@ -69,6 +77,12 @@ export function PreviewPane(): React.JSX.Element {
       onDrop={(e) => {
         e.preventDefault()
         setDragOver(false)
+        // 히스토리 썸네일 드래그 → 해당 이미지 메타데이터
+        const internalPath = e.dataTransfer.getData('nais/file-path')
+        if (internalPath) {
+          void showMeta({ filePath: internalPath })
+          return
+        }
         const file = e.dataTransfer.files?.[0]
         if (!file?.type.startsWith('image/')) return
         const reader = new FileReader()

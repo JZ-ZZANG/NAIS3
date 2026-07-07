@@ -1,4 +1,5 @@
-import { Download, FileText, FolderOpen, ImageIcon, Layers, Wand2 } from 'lucide-react'
+import { Copy, Download, FileText, FolderOpen, ImageIcon, Layers, Trash2, Wand2 } from 'lucide-react'
+import { toast } from '../stores/toast-store'
 import { openInDirector } from '../stores/director-store'
 import { setI2iSource, useGenerationStore } from '../stores/generation-store'
 import { useMetadataStore } from '../stores/metadata-store'
@@ -16,9 +17,12 @@ import {
  */
 export function ImageContextMenu({
   filePath,
+  onDelete,
   children
 }: {
   filePath: string
+  /** 지정 시 메뉴에 '삭제' 표시 — 호스트가 삭제+목록 갱신을 처리 */
+  onDelete?: () => void
   children: React.ReactNode
 }): React.JSX.Element {
   const startInpaint = useGenerationStore((s) => s.startInpaintFromPath)
@@ -40,6 +44,14 @@ export function ImageContextMenu({
         <ContextMenuItem onSelect={() => void showMeta({ filePath })}>
           <FileText size={13} className="text-sky-400" /> 메타데이터 보기
         </ContextMenuItem>
+        <ContextMenuItem
+          onSelect={async () => {
+            const { copied } = await window.nais.invoke('images:copy', { filePath })
+            if (copied) toast('클립보드에 복사됨', 'success')
+          }}
+        >
+          <Copy size={13} className="text-teal-400" /> 이미지 복사
+        </ContextMenuItem>
         <ContextMenuItem onSelect={() => void window.nais.invoke('images:saveAs', { filePath })}>
           <Download size={13} className="text-emerald-400" /> 다른 이름으로 저장
         </ContextMenuItem>
@@ -48,6 +60,14 @@ export function ImageContextMenu({
         >
           <FolderOpen size={13} className="text-amber-400" /> 파일 탐색기에서 보기
         </ContextMenuItem>
+        {onDelete && (
+          <>
+            <ContextMenuSeparator />
+            <ContextMenuItem danger onSelect={onDelete}>
+              <Trash2 size={13} /> 삭제
+            </ContextMenuItem>
+          </>
+        )}
       </ContextMenuContent>
     </ContextMenu>
   )

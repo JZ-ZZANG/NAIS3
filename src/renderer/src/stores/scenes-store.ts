@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { recordNav } from '../lib/nav-history'
 import type {
   GenerationRequest,
   Scene,
@@ -9,7 +10,7 @@ import type {
   SceneSequenceEntry
 } from '@shared/types'
 import { enabledCharacters } from './characters-store'
-import { useGenerationStore } from './generation-store'
+import { randomSeed, useGenerationStore } from './generation-store'
 
 const PAGE = 80 // 씬 상세 이미지 페이지 크기 (수만 장 대비: 한 번에 전부 로드 금지)
 let loadSeq = 0 // load() 비동기 응답 순서 보장용
@@ -84,6 +85,16 @@ interface ScenesState {
 
   /** 예약된 씬들을 예약 수만큼 큐에 넣는다 (메인 생성 버튼이 씬 모드에서 호출) */
   generateReserved: () => Promise<void>
+  /** 이 씬 1장 바로 생성 (예약 없이 — NAIS2식 즉석 생성) */
+  generateOne: (sceneId: number) => Promise<void>
+}
+
+function appendPrompt(base: string, add: string): string {
+  const b = base.trim().replace(/,\s*$/, '')
+  const a = add.trim().replace(/^,\s*/, '')
+  if (!b) return a
+  if (!a) return b
+  return `${b}, ${a}`
 }
 
 /** 씬 프롬프트를 기본 프롬프트 뒤에 이어붙임 (콤마 정리) */
@@ -108,6 +119,34 @@ function buildBaseRequest(): GenerationRequest {
     seed: seedLocked && base.seed >= 0 ? base.seed : -1,
     ...(src ? { width: src.width, height: src.height } : {}),
     characterPrompts,
+    source: src
+      ? {
+          imageBase64: src.imageBase64,
+          maskBase64: src.maskBase64,
+          strength: base.i2iStrength ?? 0.7,
+          noise: base.i2iNoise ?? 0
+        }
+      : undefined
+  }
+}
+
+function buildSceneRequest(scene: Scene): GenerationRequest {
+  const base = useGenerationStore.getState().request
+  const src = useGenerationStore.getState().source
+  const characterPrompts = enabledCharacters().map((c) => ({
+    prompt: c.prompt,
+    negativePrompt: c.negativePrompt,
+    center: c.center,
+    enabled: true as const
+  }))
+  return {
+    ...base,
+    prompt: appendPrompt(base.prompt, scene.prompt),
+    negativePrompt: appendPrompt(base.negativePrompt, scene.negativePrompt),
+    width: src ? src.width : scene.width,
+    height: src ? src.height : scene.height,
+    characterPrompts,
+    sceneId: scene.id,
     source: src
       ? {
           imageBase64: src.imageBase64,
@@ -171,6 +210,7 @@ export const useScenesStore = create<ScenesState>((set, get) => ({
     set({ scenes: items })
   },
   select: (selectedId) => {
+    if (selectedId !== get().selectedId) recordNav() // 마우스 뒤로/앞으로용 히스토리
     set({ selectedId, images: [], imagesTotal: 0 })
     if (selectedId != null) void get().loadImages(selectedId, true)
   },
@@ -364,6 +404,15 @@ export const useScenesStore = create<ScenesState>((set, get) => ({
     if (skippedEmptyEntries > 0) {
       console.info(`[SceneGeneration] skipped ${skippedEmptyEntries} empty sequence entries`)
     }
+  },
+
+  generateOne: async (sceneId) => {
+    const scene = get().scenes.find((s) => s.id === sceneId)
+    if (!scene) return
+    await window.nais.invoke('queue:enqueue', {
+      request: { ...buildSceneRequest(scene), seed: randomSeed() },
+      count: 1
+    })
   }
 }))
 

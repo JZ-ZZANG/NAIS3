@@ -82,6 +82,14 @@ export function listScenes(presetId: number): Scene[] {
   return rows.map(toScene)
 }
 
+/** 씬 저장 폴더 계층용 프리셋 이름 */
+export function getPresetName(id: number): string | null {
+  const r = getDb().prepare('SELECT name FROM scene_presets WHERE id = ?').get(id) as
+    | { name: string }
+    | undefined
+  return r?.name ?? null
+}
+
 export function getScene(id: number): Scene | null {
   const r = getDb()
     .prepare(
@@ -260,6 +268,21 @@ export function setImageFavorite(id: number, favorite: boolean): void {
     .run(favorite ? 1 : 0, id)
 }
 
+/** 히스토리 전체 비우기 — 모든 이미지 레코드+원본 파일 삭제 (씬 이미지 포함) */
+export function clearAllImages(): number {
+  const db = getDb()
+  const rows = db.prepare('SELECT file_path FROM images').all() as { file_path: string }[]
+  db.prepare('DELETE FROM images').run()
+  for (const r of rows) {
+    try {
+      unlinkSync(r.file_path)
+    } catch {
+      // 무시 (이미 없는 파일 등)
+    }
+  }
+  return rows.length
+}
+
 export function deleteImage(id: number): void {
   const db = getDb()
   const r = db.prepare('SELECT file_path FROM images WHERE id = ?').get(id) as
@@ -312,6 +335,8 @@ export async function importScenesJson(presetId: number): Promise<number> {
     scenes?: {
       name?: string
       prompt?: string
+      /** NAIS2 씬 내보내기(JSON) 포맷의 프롬프트 필드명 */
+      scenePrompt?: string
       negativePrompt?: string
       width?: number
       height?: number
@@ -331,7 +356,7 @@ export async function importScenesJson(presetId: number): Promise<number> {
       stmt.run(
         presetId,
         s.name ?? '씬',
-        s.prompt ?? '',
+        s.prompt ?? s.scenePrompt ?? '', // NAIS2 파일은 scenePrompt
         s.negativePrompt ?? '',
         s.width ?? 832,
         s.height ?? 1216,

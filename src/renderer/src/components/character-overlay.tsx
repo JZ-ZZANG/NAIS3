@@ -183,15 +183,16 @@ export function CharacterOverlay(): React.JSX.Element {
           <Trash2 size={14} />
         </Button>
       </div>
+      {/* resize-y: 우하단 핸들로 세로 크기 조절 */}
       <PromptEditor
-        className="h-28 bg-surface-2"
+        className="h-28 max-h-[420px] min-h-16 resize-y bg-surface-2"
         value={char.prompt}
         placeholder="girl, ..."
         onValueChange={(v) => updateCard(char.id, { prompt: v })}
       />
       <PromptEditor
         negative
-        className="h-16 bg-surface-2"
+        className="h-16 max-h-72 min-h-12 resize-y bg-surface-2"
         value={char.negativePrompt}
         placeholder="캐릭터 네거티브"
         onValueChange={(v) => updateCard(char.id, { negativePrompt: v })}
@@ -269,7 +270,7 @@ export function CharacterOverlay(): React.JSX.Element {
         </Button>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable_both-edges]">
+      <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden no-scrollbar">
         <FolderListView
           rows={rows}
           searching={searching}

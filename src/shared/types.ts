@@ -365,6 +365,8 @@ export interface IpcInvokeMap {
   'images:showInFolder': { req: { filePath: string }; res: void }
   /** 다른 이름으로 저장 — 파일 저장 다이얼로그로 복사 */
   'images:saveAs': { req: { filePath: string }; res: { saved: boolean } }
+  /** 이미지를 클립보드로 복사 */
+  'images:copy': { req: { filePath: string }; res: { copied: boolean } }
   /** 저장 폴더: 현재 경로 조회 / 폴더 선택 / 기본값으로 초기화 */
   'settings:getSaveDir': { req: void; res: { dir: string; isDefault: boolean } }
   'settings:pickSaveDir': { req: void; res: { dir: string | null } }
@@ -443,6 +445,8 @@ export interface IpcInvokeMap {
   }
   'images:setFavorite': { req: { id: number; favorite: boolean }; res: void }
   'images:delete': { req: { id: number }; res: void }
+  /** 히스토리 전체 비우기 (레코드+파일, 씬 이미지 포함) */
+  'images:clearAll': { req: void; res: { count: number } }
   /** 씬 JSON 내보내기/불러오기 (파일 다이얼로그, 활성 프리셋 기준) */
   'scenes:exportJson': { req: { presetId: number }; res: { saved: boolean } }
   'scenes:importJson': { req: { presetId: number }; res: { count: number } }
