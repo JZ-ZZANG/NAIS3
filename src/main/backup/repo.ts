@@ -22,6 +22,15 @@ const TABLES = [
   'charref_images',
   'scene_presets',
   'gen_scenes',
+  'scene_generation_options',
+  'scene_sequence_entries',
+  'scene_sequence_entry_prompts',
+  'scene_sequence_entry_charrefs',
+  'scene_sequence_entry_vibes',
+  'scene_character_additions',
+  'scene_character_addition_prompts',
+  'scene_character_addition_charrefs',
+  'scene_character_addition_vibes',
   'prompt_presets'
 ] as const
 

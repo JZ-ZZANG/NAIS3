@@ -141,11 +141,7 @@ const CREF_FIELDS: Record<string, string> = {
   fidelity: 'fidelity'
 }
 
-export function updateRefImage(
-  kind: Kind,
-  id: number,
-  patch: Record<string, unknown>
-): void {
+export function updateRefImage(kind: Kind, id: number, patch: Record<string, unknown>): void {
   const fields = kind === 'vibe' ? VIBE_FIELDS : CREF_FIELDS
   const sets: string[] = []
   const values: unknown[] = []
@@ -163,8 +159,7 @@ export function updateRefImage(
 export function deleteRefImage(kind: Kind, id: number): void {
   const db = getDb()
   const row = db.prepare(`SELECT file_path FROM ${TABLES[kind].items} WHERE id = ?`).get(id) as
-    | { file_path: string }
-    | undefined
+    { file_path: string } | undefined
   db.prepare(`DELETE FROM ${TABLES[kind].items} WHERE id = ?`).run(id)
   if (row && row.file_path.startsWith(refsDir())) {
     try {
@@ -261,6 +256,43 @@ export function enabledVibeRows(): {
   }))
 }
 
+export function vibeRowsByIds(ids: number[]): {
+  id: number
+  filePath: string
+  strength: number
+  infoExtracted: number
+  encoded: string | null
+  encodedIe: number | null
+}[] {
+  if (!ids.length) return []
+  const placeholders = ids.map(() => '?').join(',')
+  const rows = getDb()
+    .prepare(
+      `SELECT id, file_path, strength, info_extracted, encoded, encoded_ie
+       FROM vibe_images WHERE id IN (${placeholders})`
+    )
+    .all(...ids) as {
+    id: number
+    file_path: string
+    strength: number
+    info_extracted: number
+    encoded: string | null
+    encoded_ie: number | null
+  }[]
+  const byId = new Map(rows.map((r) => [r.id, r]))
+  return ids
+    .map((id) => byId.get(id))
+    .filter((r): r is (typeof rows)[number] => Boolean(r))
+    .map((r) => ({
+      id: r.id,
+      filePath: r.file_path,
+      strength: r.strength,
+      infoExtracted: r.info_extracted,
+      encoded: r.encoded,
+      encodedIe: r.encoded_ie
+    }))
+}
+
 export function saveVibeEncoding(id: number, encoded: string, ie: number): void {
   getDb()
     .prepare('UPDATE vibe_images SET encoded = ?, encoded_ie = ? WHERE id = ?')
@@ -285,4 +317,36 @@ export function enabledCharRefRows(): {
     strength: r.strength,
     fidelity: r.fidelity
   }))
+}
+
+export function charRefRowsByIds(ids: number[]): {
+  filePath: string
+  refType: string
+  strength: number
+  fidelity: number
+}[] {
+  if (!ids.length) return []
+  const placeholders = ids.map(() => '?').join(',')
+  const rows = getDb()
+    .prepare(
+      `SELECT id, file_path, ref_type, strength, fidelity
+       FROM charref_images WHERE id IN (${placeholders})`
+    )
+    .all(...ids) as {
+    id: number
+    file_path: string
+    ref_type: string
+    strength: number
+    fidelity: number
+  }[]
+  const byId = new Map(rows.map((r) => [r.id, r]))
+  return ids
+    .map((id) => byId.get(id))
+    .filter((r): r is (typeof rows)[number] => Boolean(r))
+    .map((r) => ({
+      filePath: r.file_path,
+      refType: r.ref_type,
+      strength: r.strength,
+      fidelity: r.fidelity
+    }))
 }

@@ -254,5 +254,70 @@ export const migrations: ((db: Database.Database) => void)[] = [
         sort_order INTEGER NOT NULL DEFAULT 0
       );
     `)
+  },
+  // v10: scene generation character/reference sequence and per-scene additions.
+  (db) => {
+    db.exec(`
+      CREATE TABLE scene_generation_options (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+      INSERT INTO scene_generation_options (key, value) VALUES
+        ('sequenceEnabled', '0'),
+        ('additionsEnabled', '0');
+
+      CREATE TABLE scene_sequence_entries (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        sort_order INTEGER NOT NULL DEFAULT 0
+      );
+
+      CREATE TABLE scene_sequence_entry_prompts (
+        entry_id INTEGER NOT NULL REFERENCES scene_sequence_entries(id) ON DELETE CASCADE,
+        character_prompt_id INTEGER NOT NULL REFERENCES character_prompts(id) ON DELETE CASCADE,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (entry_id, character_prompt_id)
+      );
+
+      CREATE TABLE scene_sequence_entry_charrefs (
+        entry_id INTEGER NOT NULL REFERENCES scene_sequence_entries(id) ON DELETE CASCADE,
+        charref_id INTEGER NOT NULL REFERENCES charref_images(id) ON DELETE CASCADE,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (entry_id, charref_id)
+      );
+
+      CREATE TABLE scene_sequence_entry_vibes (
+        entry_id INTEGER NOT NULL REFERENCES scene_sequence_entries(id) ON DELETE CASCADE,
+        vibe_id INTEGER NOT NULL REFERENCES vibe_images(id) ON DELETE CASCADE,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (entry_id, vibe_id)
+      );
+
+      CREATE TABLE scene_character_additions (
+        scene_id INTEGER PRIMARY KEY REFERENCES gen_scenes(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE scene_character_addition_prompts (
+        scene_id INTEGER NOT NULL REFERENCES scene_character_additions(scene_id) ON DELETE CASCADE,
+        character_prompt_id INTEGER NOT NULL REFERENCES character_prompts(id) ON DELETE CASCADE,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (scene_id, character_prompt_id)
+      );
+
+      CREATE TABLE scene_character_addition_charrefs (
+        scene_id INTEGER NOT NULL REFERENCES scene_character_additions(scene_id) ON DELETE CASCADE,
+        charref_id INTEGER NOT NULL REFERENCES charref_images(id) ON DELETE CASCADE,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (scene_id, charref_id)
+      );
+
+      CREATE TABLE scene_character_addition_vibes (
+        scene_id INTEGER NOT NULL REFERENCES scene_character_additions(scene_id) ON DELETE CASCADE,
+        vibe_id INTEGER NOT NULL REFERENCES vibe_images(id) ON DELETE CASCADE,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (scene_id, vibe_id)
+      );
+    `)
   }
 ]

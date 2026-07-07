@@ -117,9 +117,9 @@ app.whenReady().then(() => {
     }
 
     // 바이브/캐릭레퍼는 DB의 enabled 항목에서 준비 (바이브는 필요 시 인코딩 — 2 Anlas, 캐시됨)
-    const { vibes, newlyEncoded } = await prepareVibes(token)
+    const { vibes, newlyEncoded } = await prepareVibes(token, request.vibeIds)
     if (newlyEncoded.length) broadcast('vibes:encoded', {}) // 카드 인코딩 표시 갱신
-    const characterReferences = await prepareCharRefs()
+    const characterReferences = await prepareCharRefs(request.charRefIds)
 
     let source = request.source
     // i2i/인페인트: 소스 해상도를 유효 NAI 해상도(64 배수·픽셀 상한)로 스냅하고 이미지를 맞춰 리사이즈.
@@ -190,7 +190,8 @@ app.whenReady().then(() => {
     })
 
     // 씬 생성이면 해당 씬 갱신 알림 (목록 썸네일/개수, 상세 이미지 갱신용)
-    if (request.sceneId) broadcast('scenes:changed', { sceneId: request.sceneId, filePath: saved.filePath })
+    if (request.sceneId)
+      broadcast('scenes:changed', { sceneId: request.sceneId, filePath: saved.filePath })
 
     // 생성 후 잔액 갱신 (실사용량 추적의 진실 공급원) — 실패해도 생성 흐름엔 영향 없음
     void fetchAnlasBalance(token).then(({ anlas }) => {
@@ -294,4 +295,3 @@ async function normalizeInpaintMask(
 function stripDataUrl(base64: string): string {
   return base64.replace(/^data:[^,]+,/, '')
 }
-

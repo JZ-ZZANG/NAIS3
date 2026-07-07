@@ -2,14 +2,21 @@ import { readFileSync } from 'fs'
 import sharp from 'sharp'
 import type { CharacterReferenceOptions, VibeOptions } from '../nai/payload'
 import { ENDPOINTS } from '../nai/endpoints'
-import { enabledCharRefRows, enabledVibeRows, saveVibeEncoding } from './repo'
+import {
+  charRefRowsByIds,
+  enabledCharRefRows,
+  enabledVibeRows,
+  saveVibeEncoding,
+  vibeRowsByIds
+} from './repo'
 
 /** 생성 직전 바이브 준비 — 미인코딩/ie 변경분만 encode-vibe (2 Anlas) 후 캐시.
  *  newlyEncoded: 이번에 새로 인코딩된 바이브 id (카드 표시 갱신 통지용) */
 export async function prepareVibes(
-  token: string
+  token: string,
+  ids?: number[]
 ): Promise<{ vibes: VibeOptions[]; newlyEncoded: number[] }> {
-  const rows = enabledVibeRows()
+  const rows = ids ? vibeRowsByIds(ids) : enabledVibeRows()
   const vibes: VibeOptions[] = []
   const newlyEncoded: number[] = []
   for (const row of rows) {
@@ -48,7 +55,11 @@ async function processCharRefImage(filePath: string): Promise<string> {
   const h = meta.height ?? 1
   const ratio = w / h
   const canvas =
-    ratio > 1.2 ? { w: 1536, h: 1024 } : ratio < 1 / 1.2 ? { w: 1024, h: 1536 } : { w: 1472, h: 1472 }
+    ratio > 1.2
+      ? { w: 1536, h: 1024 }
+      : ratio < 1 / 1.2
+        ? { w: 1024, h: 1536 }
+        : { w: 1472, h: 1472 }
 
   const png = await sharp(buf)
     .resize(canvas.w, canvas.h, { fit: 'contain', background: { r: 0, g: 0, b: 0 } })
@@ -57,8 +68,8 @@ async function processCharRefImage(filePath: string): Promise<string> {
   return png.toString('base64')
 }
 
-export async function prepareCharRefs(): Promise<CharacterReferenceOptions[]> {
-  const rows = enabledCharRefRows()
+export async function prepareCharRefs(ids?: number[]): Promise<CharacterReferenceOptions[]> {
+  const rows = ids ? charRefRowsByIds(ids) : enabledCharRefRows()
   const result: CharacterReferenceOptions[] = []
   for (const row of rows) {
     result.push({

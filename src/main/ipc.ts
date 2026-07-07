@@ -70,6 +70,19 @@ import {
   exportZip
 } from './scenes/repo'
 import {
+  buildReservedSceneRequests,
+  clearSceneCharacterAddition,
+  createSceneSequenceEntry,
+  deleteSceneSequenceEntry,
+  getSceneCharacterAddition,
+  getSceneGenerationOptions,
+  listSceneSequenceEntries,
+  reorderSceneSequenceEntries,
+  setSceneCharacterAddition,
+  setSceneGenerationOptions,
+  updateSceneSequenceEntry
+} from './scenes/sequence-repo'
+import {
   listPromptPresets,
   createPromptPreset,
   updatePromptPreset,
@@ -142,6 +155,13 @@ export function registerIpcHandlers(ctx: { dbVersion: number; queue: GenerationQ
   handle('nai:anlasUsage', () => anlasUsage())
 
   handle('queue:enqueue', ({ request, count }) => ({ ids: ctx.queue.enqueue(request, count) }))
+  handle('scenes:enqueueReserved', ({ presetId, request }) => {
+    const { requests, skippedEmptyEntries } = buildReservedSceneRequests(presetId, request)
+    return {
+      ids: requests.flatMap((req) => ctx.queue.enqueue(req, 1)),
+      skippedEmptyEntries
+    }
+  })
   handle('queue:cancel', ({ ids }) => {
     ctx.queue.cancel(ids)
   })
@@ -212,7 +232,9 @@ export function registerIpcHandlers(ctx: { dbVersion: number; queue: GenerationQ
           r.prompt ? '프롬프트' : ''
         ].filter(Boolean)
         return {
-          summary: parts.length ? `NAIS2에서 ${parts.join(' · ')} 가져옴` : '가져올 항목이 없습니다',
+          summary: parts.length
+            ? `NAIS2에서 ${parts.join(' · ')} 가져옴`
+            : '가져올 항목이 없습니다',
           needsPromptReload: r.prompt
         }
       }
@@ -264,6 +286,29 @@ export function registerIpcHandlers(ctx: { dbVersion: number; queue: GenerationQ
   handle('scenes:exportJson', async ({ presetId }) => ({ saved: await exportScenesJson(presetId) }))
   handle('scenes:importJson', async ({ presetId }) => ({ count: await importScenesJson(presetId) }))
   handle('scenes:exportZip', async ({ mode }) => ({ count: await exportZip(mode) }))
+
+  handle('sceneGeneration:options', () => getSceneGenerationOptions())
+  handle('sceneGeneration:setOptions', (patch) => {
+    setSceneGenerationOptions(patch)
+  })
+  handle('sceneSequences:list', () => ({ items: listSceneSequenceEntries() }))
+  handle('sceneSequences:create', ({ name }) => ({ id: createSceneSequenceEntry(name) }))
+  handle('sceneSequences:update', ({ id, patch }) => {
+    updateSceneSequenceEntry(id, patch)
+  })
+  handle('sceneSequences:delete', ({ id }) => {
+    deleteSceneSequenceEntry(id)
+  })
+  handle('sceneSequences:reorder', ({ ids }) => {
+    reorderSceneSequenceEntries(ids)
+  })
+  handle('sceneAddition:get', ({ sceneId }) => ({ addition: getSceneCharacterAddition(sceneId) }))
+  handle('sceneAddition:set', (addition) => {
+    setSceneCharacterAddition(addition)
+  })
+  handle('sceneAddition:clear', ({ sceneId }) => {
+    clearSceneCharacterAddition(sceneId)
+  })
 
   handle('settings:get', ({ key }) => ({ value: getSetting(key) }))
   handle('settings:set', ({ key, value }) => {
@@ -345,7 +390,6 @@ export function registerIpcHandlers(ctx: { dbVersion: number; queue: GenerationQ
     copyFileSync(filePath, result.filePath)
     return { saved: true }
   })
-
 
   handle('settings:getSaveDir', () => ({
     dir: imagesRoot(),

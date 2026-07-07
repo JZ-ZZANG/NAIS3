@@ -76,6 +76,10 @@ export interface GenerationRequest {
   source?: SourceImage
   /** 씬 생성이면 씬 id (저장 시 images.scene_id 연결) */
   sceneId?: number
+  /** Request-scoped character reference ids. Omitted means use globally enabled refs. */
+  charRefIds?: number[]
+  /** Request-scoped vibe ids. Omitted means use globally enabled vibes. */
+  vibeIds?: number[]
 }
 
 export type QueueItemState = 'pending' | 'generating' | 'done' | 'failed' | 'cancelled'
@@ -259,13 +263,40 @@ export interface SceneImage {
   favorite: boolean
 }
 
+export interface SceneSequenceEntry {
+  id: number
+  name: string
+  enabled: boolean
+  characterPromptIds: number[]
+  charRefIds: number[]
+  vibeIds: number[]
+}
+
+export interface SceneCharacterAddition {
+  sceneId: number
+  characterPromptIds: number[]
+  charRefIds: number[]
+  vibeIds: number[]
+}
+
+export interface SceneGenerationOptions {
+  sequenceEnabled: boolean
+  additionsEnabled: boolean
+}
+
 /** IPC invoke 채널 계약: 채널명 → (요청, 응답) */
 export interface IpcInvokeMap {
   'db:status': { req: void; res: { version: number; path: string } }
   /** 앱 버전 */
   'app:version': { req: void; res: { version: string } }
-  'nai:verifyToken': { req: { token: string }; res: { valid: boolean; subscription?: SubscriptionInfo; error?: string } }
-  'nai:setToken': { req: { token: string }; res: { valid: boolean; subscription?: SubscriptionInfo; error?: string } }
+  'nai:verifyToken': {
+    req: { token: string }
+    res: { valid: boolean; subscription?: SubscriptionInfo; error?: string }
+  }
+  'nai:setToken': {
+    req: { token: string }
+    res: { valid: boolean; subscription?: SubscriptionInfo; error?: string }
+  }
   'nai:tokenStatus': { req: void; res: { hasToken: boolean; prefix: string; length: number } }
   'nai:revealToken': { req: void; res: { token: string | null } }
   'nai:deleteToken': { req: void; res: void }
@@ -275,7 +306,14 @@ export interface IpcInvokeMap {
   'queue:enqueue': { req: { request: GenerationRequest; count: number }; res: { ids: string[] } }
   'queue:cancel': { req: { ids: string[] }; res: void }
   'queue:status': { req: void; res: QueueStatus }
-  'images:list': { req: { limit: number; offset: number }; res: { items: HistoryItem[]; total: number } }
+  'scenes:enqueueReserved': {
+    req: { presetId: number; request: GenerationRequest }
+    res: { ids: string[]; skippedEmptyEntries: number }
+  }
+  'images:list': {
+    req: { limit: number; offset: number }
+    res: { items: HistoryItem[]; total: number }
+  }
   'images:payload': { req: { id: number }; res: { payloadJson: string | null } }
   'settings:get': { req: { key: string }; res: { value: string | null } }
   'settings:set': { req: { key: string; value: string }; res: void }
@@ -369,10 +407,7 @@ export interface IpcInvokeMap {
   /** JSON 가져오기 (열기 다이얼로그). NAIS3/NAIS2 포맷 자동 감지. summary=사람이 읽는 결과 */
   'backup:import': {
     req: void
-    res:
-      | { summary: string; needsPromptReload: boolean }
-      | { error: string }
-      | { canceled: true }
+    res: { summary: string; needsPromptReload: boolean } | { error: string } | { canceled: true }
   }
   /** 특정 프리셋의 씬 목록 */
   'scenes:list': { req: { presetId: number }; res: { items: Scene[] } }
@@ -413,6 +448,22 @@ export interface IpcInvokeMap {
   'scenes:importJson': { req: { presetId: number }; res: { count: number } }
   /** 즐겨찾기 이미지 또는 각 씬 최상단 이미지를 ZIP으로 (파일 다이얼로그) */
   'scenes:exportZip': { req: { mode: 'favorites' | 'sceneTop' }; res: { count: number } }
+  'sceneGeneration:options': { req: void; res: SceneGenerationOptions }
+  'sceneGeneration:setOptions': { req: Partial<SceneGenerationOptions>; res: void }
+  'sceneSequences:list': { req: void; res: { items: SceneSequenceEntry[] } }
+  'sceneSequences:create': { req: { name?: string }; res: { id: number } }
+  'sceneSequences:update': {
+    req: { id: number; patch: Partial<Omit<SceneSequenceEntry, 'id'>> }
+    res: void
+  }
+  'sceneSequences:delete': { req: { id: number }; res: void }
+  'sceneSequences:reorder': { req: { ids: number[] }; res: void }
+  'sceneAddition:get': {
+    req: { sceneId: number }
+    res: { addition: SceneCharacterAddition | null }
+  }
+  'sceneAddition:set': { req: SceneCharacterAddition; res: void }
+  'sceneAddition:clear': { req: { sceneId: number }; res: void }
   'vibes:list': { req: void; res: { folders: ListFolder[]; items: VibeItem[] } }
   /** 파일 다이얼로그(다중)로 추가 */
   'vibes:add': { req: { folderId: number | null }; res: { count: number } }

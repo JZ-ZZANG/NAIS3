@@ -1,7 +1,15 @@
 import { create } from 'zustand'
-import type { GenerationRequest, Scene, SceneImage, ScenePreset } from '@shared/types'
+import type {
+  GenerationRequest,
+  Scene,
+  SceneCharacterAddition,
+  SceneGenerationOptions,
+  SceneImage,
+  ScenePreset,
+  SceneSequenceEntry
+} from '@shared/types'
 import { enabledCharacters } from './characters-store'
-import { randomSeed, useGenerationStore } from './generation-store'
+import { useGenerationStore } from './generation-store'
 
 const PAGE = 80 // 씬 상세 이미지 페이지 크기 (수만 장 대비: 한 번에 전부 로드 금지)
 let loadSeq = 0 // load() 비동기 응답 순서 보장용
@@ -15,6 +23,9 @@ interface ScenesState {
   editMode: boolean
   selection: Set<number> // 편집 모드 체크된 씬들
   columns: number // 2~5
+  generationOptions: SceneGenerationOptions
+  sequenceEntries: SceneSequenceEntry[]
+  additions: Record<number, SceneCharacterAddition | null>
   cardOrientation: 'portrait' | 'landscape' // 카드 비율 고정 (해상도 무관)
 
   // 상세 이미지 (페이지네이션)
@@ -33,6 +44,15 @@ interface ScenesState {
   setEditMode: (v: boolean) => void
   setColumns: (n: number) => void
   setCardOrientation: (o: 'portrait' | 'landscape') => void
+  loadGenerationOptions: () => Promise<void>
+  setGenerationOptions: (patch: Partial<SceneGenerationOptions>) => Promise<void>
+  loadSequenceEntries: () => Promise<void>
+  createSequenceEntry: () => Promise<void>
+  updateSequenceEntry: (id: number, patch: Partial<Omit<SceneSequenceEntry, 'id'>>) => Promise<void>
+  deleteSequenceEntry: (id: number) => Promise<void>
+  loadSceneAddition: (sceneId: number) => Promise<SceneCharacterAddition | null>
+  setSceneAddition: (addition: SceneCharacterAddition) => Promise<void>
+  clearSceneAddition: (sceneId: number) => Promise<void>
   toggleSelected: (id: number) => void
   selectAll: () => void
   clearSelection: () => void
@@ -67,22 +87,15 @@ interface ScenesState {
 }
 
 /** 씬 프롬프트를 기본 프롬프트 뒤에 이어붙임 (콤마 정리) */
-function appendPrompt(base: string, add: string): string {
-  const b = base.trim().replace(/,\s*$/, '')
-  const a = add.trim().replace(/^,\s*/, '')
-  if (!b) return a
-  if (!a) return b
-  return `${b}, ${a}`
-}
-
 /**
  * 씬 → 생성 요청. 사이드바의 모든 것(기본/네거 프롬프트·캐릭터·조각·바이브·레퍼런스·
  * 파라미터)을 그대로 쓰고, 씬 프롬프트는 기본/네거 프롬프트 "뒤에 이어붙인다".
  * 해상도만 씬 것을 사용 (소스가 있으면 소스 해상도가 우선). 바이브/레퍼런스/조각은
  * 메인 프로세스가 DB·와일드카드에서 읽어 적용하므로 여기선 프롬프트·캐릭터·파라미터만 구성.
  */
-function buildSceneRequest(scene: Scene): GenerationRequest {
+function buildBaseRequest(): GenerationRequest {
   const base = useGenerationStore.getState().request
+  const seedLocked = useGenerationStore.getState().seedLocked
   const src = useGenerationStore.getState().source
   const characterPrompts = enabledCharacters().map((c) => ({
     prompt: c.prompt,
@@ -92,12 +105,9 @@ function buildSceneRequest(scene: Scene): GenerationRequest {
   }))
   return {
     ...base,
-    prompt: appendPrompt(base.prompt, scene.prompt),
-    negativePrompt: appendPrompt(base.negativePrompt, scene.negativePrompt),
-    width: src ? src.width : scene.width,
-    height: src ? src.height : scene.height,
+    seed: seedLocked && base.seed >= 0 ? base.seed : -1,
+    ...(src ? { width: src.width, height: src.height } : {}),
     characterPrompts,
-    sceneId: scene.id,
     source: src
       ? {
           imageBase64: src.imageBase64,
@@ -117,7 +127,11 @@ export const useScenesStore = create<ScenesState>((set, get) => ({
   editMode: false,
   selection: new Set(),
   columns: Number(localStorage.getItem('scene_columns')) || 3,
-  cardOrientation: (localStorage.getItem('scene_orientation') as 'portrait' | 'landscape') || 'portrait',
+  cardOrientation:
+    (localStorage.getItem('scene_orientation') as 'portrait' | 'landscape') || 'portrait',
+  generationOptions: { sequenceEnabled: false, additionsEnabled: false },
+  sequenceEntries: [],
+  additions: {},
   images: [],
   imagesTotal: 0,
   imagesLoading: false,
@@ -168,6 +182,45 @@ export const useScenesStore = create<ScenesState>((set, get) => ({
   setCardOrientation: (cardOrientation) => {
     set({ cardOrientation })
     localStorage.setItem('scene_orientation', cardOrientation)
+  },
+  loadGenerationOptions: async () => {
+    const options = await window.nais.invoke('sceneGeneration:options', undefined)
+    set({ generationOptions: options })
+  },
+  setGenerationOptions: async (patch) => {
+    set({ generationOptions: { ...get().generationOptions, ...patch } })
+    await window.nais.invoke('sceneGeneration:setOptions', patch)
+  },
+  loadSequenceEntries: async () => {
+    const { items } = await window.nais.invoke('sceneSequences:list', undefined)
+    set({ sequenceEntries: items })
+  },
+  createSequenceEntry: async () => {
+    await window.nais.invoke('sceneSequences:create', {})
+    await get().loadSequenceEntries()
+  },
+  updateSequenceEntry: async (id, patch) => {
+    set({
+      sequenceEntries: get().sequenceEntries.map((e) => (e.id === id ? { ...e, ...patch } : e))
+    })
+    await window.nais.invoke('sceneSequences:update', { id, patch })
+  },
+  deleteSequenceEntry: async (id) => {
+    set({ sequenceEntries: get().sequenceEntries.filter((e) => e.id !== id) })
+    await window.nais.invoke('sceneSequences:delete', { id })
+  },
+  loadSceneAddition: async (sceneId) => {
+    const { addition } = await window.nais.invoke('sceneAddition:get', { sceneId })
+    set({ additions: { ...get().additions, [sceneId]: addition } })
+    return addition
+  },
+  setSceneAddition: async (addition) => {
+    set({ additions: { ...get().additions, [addition.sceneId]: addition } })
+    await window.nais.invoke('sceneAddition:set', addition)
+  },
+  clearSceneAddition: async (sceneId) => {
+    set({ additions: { ...get().additions, [sceneId]: null } })
+    await window.nais.invoke('sceneAddition:clear', { sceneId })
   },
   toggleSelected: (id) => {
     const next = new Set(get().selection)
@@ -301,15 +354,15 @@ export const useScenesStore = create<ScenesState>((set, get) => ({
   generateReserved: async () => {
     const reserved = get().scenes.filter((s) => s.reserveCount > 0)
     // 예약을 큐에 넣는 즉시 예약 수는 소진(0) — 예약이란 게 "뽑을 대기열"이므로
+    if (!reserved.length) return
     set({ scenes: get().scenes.map((s) => (s.reserveCount > 0 ? { ...s, reserveCount: 0 } : s)) })
-    void window.nais.invoke('scenes:setReserveAll', { presetId: get().activePresetId, count: 0 })
-    for (const scene of reserved) {
-      for (let i = 0; i < scene.reserveCount; i++) {
-        await window.nais.invoke('queue:enqueue', {
-          request: { ...buildSceneRequest(scene), seed: randomSeed() },
-          count: 1
-        })
-      }
+    const { ids, skippedEmptyEntries } = await window.nais.invoke('scenes:enqueueReserved', {
+      presetId: get().activePresetId,
+      request: buildBaseRequest()
+    })
+    if (!ids.length) await get().load()
+    if (skippedEmptyEntries > 0) {
+      console.info(`[SceneGeneration] skipped ${skippedEmptyEntries} empty sequence entries`)
     }
   }
 }))

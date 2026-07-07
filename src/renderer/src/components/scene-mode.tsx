@@ -2,6 +2,7 @@ import {
   CalendarPlus,
   CalendarX,
   ChevronDown,
+  ChevronRight,
   Copy,
   FileDown,
   FileUp,
@@ -14,8 +15,13 @@ import {
   Plus,
   RectangleHorizontal,
   RectangleVertical,
+  Repeat2,
+  Search,
+  Settings2,
   Star,
-  Trash2
+  Trash2,
+  UserRound,
+  UserPlus
 } from 'lucide-react'
 import {
   closestCenter,
@@ -29,17 +35,30 @@ import {
 } from '@dnd-kit/core'
 import { arrayMove, rectSortingStrategy, SortableContext, useSortable } from '@dnd-kit/sortable'
 import { AnimatePresence, motion } from 'motion/react'
-import { memo, useEffect, useState, type CSSProperties } from 'react'
-import type { Scene } from '@shared/types'
+import { memo, useEffect, useMemo, useState, type CSSProperties } from 'react'
+import type {
+  CharacterCard,
+  CharRefItem,
+  ListFolder,
+  Scene,
+  SceneCharacterAddition,
+  SceneSequenceEntry,
+  VibeItem
+} from '@shared/types'
 import { RESOLUTIONS, imageUrl } from '../lib/constants'
 import { useGenerationStore } from '../stores/generation-store'
 import { useScenesStore } from '../stores/scenes-store'
 import { useResolutionsStore } from '../stores/resolutions-store'
+import { useCharactersStore } from '../stores/characters-store'
+import { useCharRefsStore, useVibesStore } from '../stores/refs-store'
 import { askConfirm, askText } from '../stores/dialog-store'
 import { toast } from '../stores/toast-store'
+import { buildDisplayRows } from '../lib/folder-list'
 import { cn } from '../lib/utils'
 import { SceneDetail } from './scene-detail'
 import { Button } from './ui/button'
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from './ui/dialog'
+import { Input } from './ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select'
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip'
@@ -179,6 +198,16 @@ function SceneGrid(): React.JSX.Element {
   const adjustReserveAll = useScenesStore((s) => s.adjustReserveAll)
   const clearReserveAll = useScenesStore((s) => s.clearReserveAll)
   const reorder = useScenesStore((s) => s.reorder)
+  const generationOptions = useScenesStore((s) => s.generationOptions)
+  const setGenerationOptions = useScenesStore((s) => s.setGenerationOptions)
+  const loadGenerationOptions = useScenesStore((s) => s.loadGenerationOptions)
+  const loadSequenceEntries = useScenesStore((s) => s.loadSequenceEntries)
+  const [sequenceOpen, setSequenceOpen] = useState(false)
+
+  useEffect(() => {
+    void loadGenerationOptions()
+    void loadSequenceEntries()
+  }, [loadGenerationOptions, loadSequenceEntries])
 
   // 드래그 재정렬 (5px 이동해야 시작 — 클릭과 구분).
   // DragOverlay 사용: 드래그 중엔 가벼운 클론이 커서를 따라가고 원본은 숨겨 프레임 저하 방지
@@ -240,7 +269,11 @@ function SceneGrid(): React.JSX.Element {
             <TooltipContent>ZIP 내보내기</TooltipContent>
           </Tooltip>
           <PopoverContent align="start" className="w-52 p-1">
-            <MenuItem icon={<Star size={13} />} label="즐겨찾기 이미지" onClick={() => void exportZip('favorites')} />
+            <MenuItem
+              icon={<Star size={13} />}
+              label="즐겨찾기 이미지"
+              onClick={() => void exportZip('favorites')}
+            />
             <MenuItem
               icon={<ImageOff size={13} />}
               label="각 씬 최상단 이미지"
@@ -255,16 +288,55 @@ function SceneGrid(): React.JSX.Element {
           onClick={() => setEditMode(!editMode)}
         />
 
+        <div className="mx-1 h-5 w-px bg-line" />
+        <IconBtn
+          icon={<Repeat2 size={16} />}
+          tip="Character queue repeat"
+          active={generationOptions.sequenceEnabled}
+          onClick={() =>
+            void setGenerationOptions({ sequenceEnabled: !generationOptions.sequenceEnabled })
+          }
+        />
+        <IconBtn
+          icon={<Settings2 size={16} />}
+          tip="Repeat settings"
+          onClick={() => setSequenceOpen(true)}
+        />
+        <IconBtn
+          icon={<UserPlus size={16} />}
+          tip="Scene character additions"
+          active={generationOptions.additionsEnabled}
+          onClick={() =>
+            void setGenerationOptions({ additionsEnabled: !generationOptions.additionsEnabled })
+          }
+        />
+
         <div className="flex-1" />
 
-        <IconBtn icon={<CalendarPlus size={16} />} tip="전체 예약 +1" onClick={() => void adjustReserveAll(1)} />
-        <IconBtn icon={<CalendarX size={16} />} tip="전체 예약 취소" onClick={() => void clearReserveAll()} />
+        <IconBtn
+          icon={<CalendarPlus size={16} />}
+          tip="전체 예약 +1"
+          onClick={() => void adjustReserveAll(1)}
+        />
+        <IconBtn
+          icon={<CalendarX size={16} />}
+          tip="전체 예약 취소"
+          onClick={() => void clearReserveAll()}
+        />
         <div className="mx-1 h-5 w-px bg-line" />
         {/* 카드 비율: 세로/가로 (해상도와 무관하게 고정) */}
         <IconBtn
-          icon={cardOrientation === 'portrait' ? <RectangleVertical size={16} /> : <RectangleHorizontal size={16} />}
+          icon={
+            cardOrientation === 'portrait' ? (
+              <RectangleVertical size={16} />
+            ) : (
+              <RectangleHorizontal size={16} />
+            )
+          }
           tip={cardOrientation === 'portrait' ? '세로 카드 (클릭: 가로)' : '가로 카드 (클릭: 세로)'}
-          onClick={() => setCardOrientation(cardOrientation === 'portrait' ? 'landscape' : 'portrait')}
+          onClick={() =>
+            setCardOrientation(cardOrientation === 'portrait' ? 'landscape' : 'portrait')
+          }
         />
         {/* 열 수 (2~5) */}
         <div className="flex items-center gap-0.5 rounded-md bg-surface-2 p-0.5">
@@ -282,6 +354,8 @@ function SceneGrid(): React.JSX.Element {
           ))}
         </div>
       </div>
+
+      <SequenceSettingsDialog open={sequenceOpen} onOpenChange={setSequenceOpen} />
 
       <AnimatePresence initial={false}>
         {editMode && (
@@ -307,7 +381,10 @@ function SceneGrid(): React.JSX.Element {
           onDragCancel={() => setDragScene(null)}
           onDragEnd={onDragEnd}
         >
-          <SortableContext items={scenes.map((s) => `scene-${s.id}`)} strategy={rectSortingStrategy}>
+          <SortableContext
+            items={scenes.map((s) => `scene-${s.id}`)}
+            strategy={rectSortingStrategy}
+          >
             <div
               className="grid gap-3"
               style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
@@ -369,6 +446,555 @@ function SceneGrid(): React.JSX.Element {
 }
 
 /** 편집 모드 일괄 작업 바 */
+function SequenceSettingsDialog({
+  open,
+  onOpenChange
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}): React.JSX.Element {
+  const entries = useScenesStore((s) => s.sequenceEntries)
+  const loadEntries = useScenesStore((s) => s.loadSequenceEntries)
+  const createEntry = useScenesStore((s) => s.createSequenceEntry)
+  const updateEntry = useScenesStore((s) => s.updateSequenceEntry)
+  const deleteEntry = useScenesStore((s) => s.deleteSequenceEntry)
+  const characterFolders = useCharactersStore((s) => s.folders)
+  const characters = useCharactersStore((s) => s.items)
+  const loadCharacters = useCharactersStore((s) => s.load)
+  const toggleCharacterFolder = useCharactersStore((s) => s.toggleCollapse)
+  const charRefFolders = useCharRefsStore((s) => s.folders)
+  const charRefs = useCharRefsStore((s) => s.items)
+  const loadCharRefs = useCharRefsStore((s) => s.load)
+  const toggleCharRefFolder = useCharRefsStore((s) => s.toggleCollapse)
+  const vibeFolders = useVibesStore((s) => s.folders)
+  const vibes = useVibesStore((s) => s.items)
+  const loadVibes = useVibesStore((s) => s.load)
+  const toggleVibeFolder = useVibesStore((s) => s.toggleCollapse)
+
+  useEffect(() => {
+    if (!open) return
+    void loadEntries()
+    void loadCharacters()
+    void loadCharRefs()
+    void loadVibes()
+  }, [open, loadEntries, loadCharacters, loadCharRefs, loadVibes])
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-3xl">
+        <div className="border-b border-line px-4 py-3">
+          <DialogTitle>Character / Reference Queue Repeat</DialogTitle>
+          <DialogDescription>
+            Repeat the reserved scene queue with selected characters and references.
+          </DialogDescription>
+        </div>
+        <div className="max-h-[70vh] space-y-3 overflow-y-auto p-4">
+          <Button size="sm" onClick={() => void createEntry()}>
+            <Plus size={14} /> Add Item
+          </Button>
+          {entries.map((entry, index) => (
+            <SequenceEntryEditor
+              key={entry.id}
+              entry={entry}
+              index={index}
+              characterFolders={characterFolders}
+              characters={characters}
+              onToggleCharacterFolder={toggleCharacterFolder}
+              charRefFolders={charRefFolders}
+              charRefs={charRefs}
+              onToggleCharRefFolder={toggleCharRefFolder}
+              vibeFolders={vibeFolders}
+              vibes={vibes}
+              onToggleVibeFolder={toggleVibeFolder}
+              onUpdate={(patch) => void updateEntry(entry.id, patch)}
+              onDelete={() => void deleteEntry(entry.id)}
+            />
+          ))}
+          {entries.length === 0 && <p className="text-[13px] text-faint">No repeat items.</p>}
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function SequenceEntryEditor({
+  entry,
+  index,
+  characterFolders,
+  characters,
+  onToggleCharacterFolder,
+  charRefFolders,
+  charRefs,
+  onToggleCharRefFolder,
+  vibeFolders,
+  vibes,
+  onToggleVibeFolder,
+  onUpdate,
+  onDelete
+}: {
+  entry: SceneSequenceEntry
+  index: number
+  characterFolders: ListFolder[]
+  characters: CharacterCard[]
+  onToggleCharacterFolder: (id: number) => void
+  charRefFolders: ListFolder[]
+  charRefs: CharRefItem[]
+  onToggleCharRefFolder: (id: number) => void
+  vibeFolders: ListFolder[]
+  vibes: VibeItem[]
+  onToggleVibeFolder: (id: number) => void
+  onUpdate: (patch: Partial<Omit<SceneSequenceEntry, 'id'>>) => void
+  onDelete: () => void
+}): React.JSX.Element {
+  const [collapsed, setCollapsed] = useState(false)
+  const empty =
+    !entry.characterPromptIds.length && !entry.charRefIds.length && !entry.vibeIds.length
+  return (
+    <div
+      className={cn('rounded-lg border border-line bg-paper p-3', !entry.enabled && 'opacity-60')}
+    >
+      <div className="flex items-start gap-2">
+        <button
+          className="mt-0.5 grid size-7 shrink-0 place-items-center rounded-md text-muted hover:bg-surface-2 hover:text-ink"
+          onClick={() => setCollapsed(!collapsed)}
+          title={collapsed ? 'Expand' : 'Collapse'}
+        >
+          {collapsed ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
+        </button>
+        <div className="min-w-0 flex-1">
+          <div className="flex min-h-7 items-center gap-2">
+            <span className="text-[13px] font-semibold text-ink">Repeat {index + 1}</span>
+            {empty && (
+              <span className="rounded bg-danger/15 px-2 py-1 text-[11px] text-danger">
+                empty
+              </span>
+            )}
+          </div>
+          <CombinedSelectionSummary
+            promptIds={entry.characterPromptIds}
+            characters={characters}
+            onRemovePrompt={(id) =>
+              onUpdate({ characterPromptIds: entry.characterPromptIds.filter((v) => v !== id) })
+            }
+            charRefIds={entry.charRefIds}
+            charRefs={charRefs}
+            onRemoveCharRef={(id) =>
+              onUpdate({ charRefIds: entry.charRefIds.filter((v) => v !== id) })
+            }
+            vibeIds={entry.vibeIds}
+            vibes={vibes}
+            onRemoveVibe={(id) => onUpdate({ vibeIds: entry.vibeIds.filter((v) => v !== id) })}
+          />
+        </div>
+        <Button
+          size="sm"
+          variant={entry.enabled ? 'default' : 'ghost'}
+          onClick={() => onUpdate({ enabled: !entry.enabled })}
+        >
+          {entry.enabled ? 'On' : 'Off'}
+        </Button>
+        <Button size="sm" variant="ghost" className="text-danger" onClick={onDelete}>
+          <Trash2 size={13} />
+        </Button>
+      </div>
+      <AnimatePresence initial={false}>
+        {!collapsed && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
+            className="mt-3 overflow-hidden"
+          >
+            <CharacterSelectionList
+              title="Character Prompts"
+              selected={entry.characterPromptIds}
+              folders={characterFolders}
+              items={characters}
+              showSummary={false}
+              onToggleFolder={onToggleCharacterFolder}
+              onChange={(characterPromptIds) => onUpdate({ characterPromptIds })}
+            />
+            <RefSelectionList
+              title="Character References"
+              selected={entry.charRefIds}
+              folders={charRefFolders}
+              items={charRefs}
+              fallbackPrefix="Reference"
+              showSummary={false}
+              onToggleFolder={onToggleCharRefFolder}
+              onChange={(charRefIds) => onUpdate({ charRefIds })}
+            />
+            <RefSelectionList
+              title="Vibes"
+              selected={entry.vibeIds}
+              folders={vibeFolders}
+              items={vibes}
+              fallbackPrefix="Vibe"
+              showSummary={false}
+              onToggleFolder={onToggleVibeFolder}
+              onChange={(vibeIds) => onUpdate({ vibeIds })}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  )
+}
+
+function characterLabel(item: CharacterCard): string {
+  return item.name || item.prompt.split(',')[0]?.trim() || `Character ${item.id}`
+}
+
+function refLabel<T extends CharRefItem | VibeItem>(item: T, prefix: string): string {
+  return item.name || `${prefix} ${item.id}`
+}
+
+function SummaryChip({
+  tone,
+  label,
+  onRemove
+}: {
+  tone: 'prompt' | 'ref' | 'vibe'
+  label: string
+  onRemove?: () => void
+}): React.JSX.Element {
+  if (!onRemove) return <></>
+  return (
+    <button
+      className={cn(
+        'flex max-w-44 items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] transition hover:bg-paper',
+        tone === 'prompt' && 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300',
+        tone === 'ref' && 'bg-sky-500/15 text-sky-700 dark:text-sky-300',
+        tone === 'vibe' && 'bg-fuchsia-500/15 text-fuchsia-700 dark:text-fuchsia-300',
+        tone === 'prompt' && 'border-emerald-500/25',
+        tone === 'ref' && 'border-sky-500/25',
+        tone === 'vibe' && 'border-fuchsia-500/25'
+      )}
+      title={label}
+      onClick={onRemove}
+    >
+      <span className="truncate">{label}</span>
+      <span className="text-faint">x</span>
+    </button>
+  )
+}
+
+function CombinedSelectionSummary({
+  promptIds,
+  characters,
+  onRemovePrompt,
+  charRefIds,
+  charRefs,
+  onRemoveCharRef,
+  vibeIds,
+  vibes,
+  onRemoveVibe
+}: {
+  promptIds: number[]
+  characters: CharacterCard[]
+  onRemovePrompt: (id: number) => void
+  charRefIds: number[]
+  charRefs: CharRefItem[]
+  onRemoveCharRef: (id: number) => void
+  vibeIds: number[]
+  vibes: VibeItem[]
+  onRemoveVibe: (id: number) => void
+}): React.JSX.Element {
+  const prompts = promptIds
+    .map((id) => characters.find((item) => item.id === id))
+    .filter((item): item is CharacterCard => Boolean(item))
+  const refs = charRefIds
+    .map((id) => charRefs.find((item) => item.id === id))
+    .filter((item): item is CharRefItem => Boolean(item))
+  const vibeItems = vibeIds
+    .map((id) => vibes.find((item) => item.id === id))
+    .filter((item): item is VibeItem => Boolean(item))
+
+  if (!prompts.length && !refs.length && !vibeItems.length) {
+    return <p className="text-[12px] text-faint">No items selected.</p>
+  }
+
+  return (
+    <div className="mt-1 flex max-h-14 flex-wrap gap-1 overflow-y-auto rounded-md border border-line/80 bg-surface/50 p-1">
+      {prompts.map((item) => (
+        <SummaryChip
+          key={`prompt-${item.id}`}
+          tone="prompt"
+          label={`Prompt - ${characterLabel(item)}`}
+          onRemove={() => onRemovePrompt(item.id)}
+        />
+      ))}
+      {refs.map((item) => (
+        <SummaryChip
+          key={`ref-${item.id}`}
+          tone="ref"
+          label={`Ref - ${refLabel(item, 'Reference')}`}
+          onRemove={() => onRemoveCharRef(item.id)}
+        />
+      ))}
+      {vibeItems.map((item) => (
+        <SummaryChip
+          key={`vibe-${item.id}`}
+          tone="vibe"
+          label={`Vibe - ${refLabel(item, 'Vibe')}`}
+          onRemove={() => onRemoveVibe(item.id)}
+        />
+      ))}
+      {prompts.map((item) => (
+        <SummaryChip key={`p-${item.id}`} tone="prompt" label={`Prompt · ${characterLabel(item)}`} />
+      ))}
+      {refs.map((item) => (
+        <SummaryChip key={`r-${item.id}`} tone="ref" label={`Ref · ${refLabel(item, 'Reference')}`} />
+      ))}
+      {vibeItems.map((item) => (
+        <SummaryChip key={`v-${item.id}`} tone="vibe" label={`Vibe · ${refLabel(item, 'Vibe')}`} />
+      ))}
+    </div>
+  )
+}
+
+function SelectionSummary<T extends { id: number }>({
+  selected,
+  items,
+  labelFor,
+  onRemove
+}: {
+  selected: number[]
+  items: T[]
+  labelFor: (item: T) => string
+  onRemove: (id: number) => void
+}): React.JSX.Element | null {
+  const selectedItems = selected
+    .map((id) => items.find((item) => item.id === id))
+    .filter((item): item is T => Boolean(item))
+
+  if (!selectedItems.length) return null
+
+  return (
+    <div className="mb-2 flex max-h-16 flex-wrap gap-1 overflow-y-auto rounded-md border border-accent/25 bg-accent/10 p-1">
+      {selectedItems.map((item) => (
+        <button
+          key={item.id}
+          className="flex max-w-52 items-center gap-1 rounded bg-paper px-1.5 py-1 text-[11px] text-accent shadow-sm"
+          onClick={() => onRemove(item.id)}
+          title="Remove"
+        >
+          <span className="truncate">{labelFor(item)}</span>
+          <span className="text-faint">x</span>
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function CharacterSelectionList({
+  title,
+  selected,
+  folders,
+  items,
+  showSummary = true,
+  onToggleFolder,
+  onChange
+}: {
+  title: string
+  selected: number[]
+  folders: ListFolder[]
+  items: CharacterCard[]
+  showSummary?: boolean
+  onToggleFolder: (id: number) => void
+  onChange: (ids: number[]) => void
+}): React.JSX.Element {
+  const [search, setSearch] = useState('')
+  const selectedSet = useMemo(() => new Set(selected), [selected])
+  const toggle = (id: number): void => {
+    onChange(selectedSet.has(id) ? selected.filter((v) => v !== id) : [...selected, id])
+  }
+  const rows = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    const all = buildDisplayRows(folders, items)
+    if (!q) return all
+    return all.filter(
+      (row) =>
+        row.type === 'item' &&
+        (row.item.name.toLowerCase().includes(q) ||
+          row.item.prompt.toLowerCase().includes(q) ||
+          row.item.negativePrompt.toLowerCase().includes(q))
+    )
+  }, [folders, items, search])
+
+  return (
+    <div className="mb-3 last:mb-0">
+      <div className="mb-1.5 flex items-center gap-2">
+        <div className="text-[12px] font-semibold text-muted">
+          {title} <span className="font-normal text-faint">{selected.length}</span>
+        </div>
+        <div className="relative ml-auto w-56">
+          <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-faint" />
+          <Input
+            className="h-7 pl-7 text-[12px]"
+            value={search}
+            placeholder="Search"
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+      </div>
+      {showSummary && (
+        <SelectionSummary selected={selected} items={items} labelFor={characterLabel} onRemove={toggle} />
+      )}
+      <div className="max-h-56 overflow-y-auto rounded-md border border-line bg-surface p-1">
+        {rows.map((row) =>
+          row.type === 'folder' ? (
+            <button
+              key={`f-${row.folder.id}`}
+              className="mt-1 flex h-8 w-full items-center gap-1.5 rounded-md bg-surface-2 px-2 text-left text-[12px] font-medium text-muted first:mt-0 hover:text-ink"
+              style={
+                row.folder.color
+                  ? { backgroundColor: `color-mix(in srgb, ${row.folder.color} 22%, var(--surface-2))` }
+                  : undefined
+              }
+              onClick={() => onToggleFolder(row.folder.id)}
+            >
+              {row.folder.collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+              <span className="truncate">{row.folder.name}</span>
+            </button>
+          ) : row.hidden ? null : (
+            <button
+              key={row.item.id}
+              onClick={() => toggle(row.item.id)}
+              className={cn(
+                'mt-1 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-surface-2',
+                selectedSet.has(row.item.id) && 'bg-accent/15 text-accent'
+              )}
+            >
+              {row.item.thumbnail ? (
+                <img
+                  src={`data:image/webp;base64,${row.item.thumbnail}`}
+                  className="size-8 shrink-0 rounded-md object-cover"
+                  alt=""
+                />
+              ) : (
+                <span className="grid size-8 shrink-0 place-items-center rounded-md bg-paper text-faint">
+                  <UserRound size={14} />
+                </span>
+              )}
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[12.5px] font-medium">
+                  {characterLabel(row.item)}
+                </span>
+                <span className="block truncate text-[11px] text-faint">
+                  {row.item.prompt || row.item.negativePrompt || 'Empty prompt'}
+                </span>
+              </span>
+            </button>
+          )
+        )}
+        {rows.length === 0 && <p className="px-2 py-2 text-[12px] text-faint">No items.</p>}
+      </div>
+    </div>
+  )
+}
+
+function RefSelectionList<T extends CharRefItem | VibeItem>({
+  title,
+  selected,
+  folders,
+  items,
+  fallbackPrefix,
+  showSummary = true,
+  onToggleFolder,
+  onChange
+}: {
+  title: string
+  selected: number[]
+  folders: ListFolder[]
+  items: T[]
+  fallbackPrefix: string
+  showSummary?: boolean
+  onToggleFolder: (id: number) => void
+  onChange: (ids: number[]) => void
+}): React.JSX.Element {
+  const [search, setSearch] = useState('')
+  const selectedSet = useMemo(() => new Set(selected), [selected])
+  const toggle = (id: number): void => {
+    onChange(selectedSet.has(id) ? selected.filter((v) => v !== id) : [...selected, id])
+  }
+  const labelFor = (item: T): string => item.name || `${fallbackPrefix} ${item.id}`
+  const rows = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    const all = buildDisplayRows(folders, items)
+    if (!q) return all
+    return all.filter(
+      (row) => row.type === 'item' && (row.item.name.toLowerCase().includes(q) || String(row.item.id).includes(q))
+    )
+  }, [folders, items, search])
+
+  return (
+    <div className="mb-3 last:mb-0">
+      <div className="mb-1.5 flex items-center gap-2">
+        <div className="text-[12px] font-semibold text-muted">
+          {title} <span className="font-normal text-faint">{selected.length}</span>
+        </div>
+        <div className="relative ml-auto w-56">
+          <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-faint" />
+          <Input
+            className="h-7 pl-7 text-[12px]"
+            value={search}
+            placeholder="Search"
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+      </div>
+      {showSummary && (
+        <SelectionSummary selected={selected} items={items} labelFor={labelFor} onRemove={toggle} />
+      )}
+      <div className="grid max-h-40 grid-cols-2 gap-1 overflow-y-auto rounded-md border border-line bg-surface p-1">
+        {rows.map((row) =>
+          row.type === 'folder' ? (
+            <button
+              key={`f-${row.folder.id}`}
+              className="col-span-2 mt-1 flex h-8 w-full items-center gap-1.5 rounded-md bg-surface-2 px-2 text-left text-[12px] font-medium text-muted first:mt-0 hover:text-ink"
+              style={
+                row.folder.color
+                  ? { backgroundColor: `color-mix(in srgb, ${row.folder.color} 22%, var(--surface-2))` }
+                  : undefined
+              }
+              onClick={() => onToggleFolder(row.folder.id)}
+            >
+              {row.folder.collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+              <span className="truncate">{row.folder.name}</span>
+            </button>
+          ) : row.hidden ? null : (
+            <button
+              key={row.item.id}
+              onClick={() => toggle(row.item.id)}
+              className={cn(
+                'flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-surface-2',
+                selectedSet.has(row.item.id) && 'bg-accent/15 text-accent'
+              )}
+            >
+              <img
+                src={`data:image/webp;base64,${row.item.thumbnail}`}
+                className="size-8 shrink-0 rounded-md object-cover"
+                alt=""
+              />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[12.5px] font-medium">{labelFor(row.item)}</span>
+                {'refType' in row.item && (
+                  <span className="block truncate text-[11px] text-faint">{row.item.refType}</span>
+                )}
+              </span>
+            </button>
+          )
+        )}
+        {rows.length === 0 && (
+          <p className="col-span-2 px-2 py-2 text-[12px] text-faint">No items.</p>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function BulkBar(): React.JSX.Element {
   const selection = useScenesStore((s) => s.selection)
   const presets = useScenesStore((s) => s.presets)
@@ -498,6 +1124,7 @@ function dndStyle(sortable: ReturnType<typeof useSortable>): CSSProperties {
   }
 }
 
+/* eslint-disable react-hooks/refs -- @dnd-kit useSortable exposes render-time props/ref callbacks by design. */
 const SceneCard = memo(function SceneCard({
   scene,
   live,
@@ -516,7 +1143,10 @@ const SceneCard = memo(function SceneCard({
   const duplicate = useScenesStore((s) => s.duplicate)
   const remove = useScenesStore((s) => s.remove)
   const adjustReserve = useScenesStore((s) => s.adjustReserve)
+  const additionsEnabled = useScenesStore((s) => s.generationOptions.additionsEnabled)
+  const addition = useScenesStore((s) => s.additions[scene.id])
   const sortable = useSortable({ id: `scene-${scene.id}` })
+  const [additionOpen, setAdditionOpen] = useState(false)
 
   const checked = selection.has(scene.id)
   // 이미지 우선순위: 생성 중 스트리밍 > 저장 썸네일(가벼움, 드래그 렉 방지) > 원본 > 없음.
@@ -544,7 +1174,12 @@ const SceneCard = memo(function SceneCard({
     >
       {/* 배경 이미지 (생성 중이면 스트리밍 프리뷰) */}
       {src ? (
-        <img src={src} className="h-full w-full cursor-pointer object-cover" draggable={false} alt="" />
+        <img
+          src={src}
+          className="h-full w-full cursor-pointer object-cover"
+          draggable={false}
+          alt=""
+        />
       ) : (
         <div className="flex h-full w-full cursor-pointer items-center justify-center bg-paper text-faint">
           <ImageOff size={26} strokeWidth={1.3} />
@@ -595,7 +1230,11 @@ const SceneCard = memo(function SceneCard({
                 if (name) void update(scene.id, { name })
               }}
             />
-            <MenuItem icon={<Copy size={13} />} label="복제" onClick={() => void duplicate(scene.id)} />
+            <MenuItem
+              icon={<Copy size={13} />}
+              label="복제"
+              onClick={() => void duplicate(scene.id)}
+            />
             <MenuItem
               icon={<Trash2 size={13} />}
               label="삭제"
@@ -628,7 +1267,9 @@ const SceneCard = memo(function SceneCard({
                 onChange={(e) => void update(scene.id, { name: e.target.value })}
               />
             ) : (
-              <div className="truncate text-[13px] font-semibold text-white drop-shadow">{scene.name}</div>
+              <div className="truncate text-[13px] font-semibold text-white drop-shadow">
+                {scene.name}
+              </div>
             )}
           </div>
           {/* 예약 +/- */}
@@ -637,6 +1278,17 @@ const SceneCard = memo(function SceneCard({
             onClick={(e) => e.stopPropagation()}
             onPointerDown={(e) => e.stopPropagation()}
           >
+            {additionsEnabled && (
+              <button
+                className={cn(
+                  'grid size-5 place-items-center rounded-full text-white hover:bg-white/20',
+                  addition && 'bg-accent'
+                )}
+                onClick={() => setAdditionOpen(true)}
+              >
+                <UserPlus size={12} />
+              </button>
+            )}
             <button
               className="grid size-5 place-items-center rounded-full text-white hover:bg-white/20 disabled:opacity-30"
               disabled={scene.reserveCount === 0}
@@ -656,9 +1308,163 @@ const SceneCard = memo(function SceneCard({
           </div>
         </div>
       </div>
+      <SceneAdditionDialog scene={scene} open={additionOpen} onOpenChange={setAdditionOpen} />
     </div>
   )
 })
+/* eslint-enable react-hooks/refs */
+
+function SceneAdditionDialog({
+  scene,
+  open,
+  onOpenChange
+}: {
+  scene: Scene
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}): React.JSX.Element {
+  const stored = useScenesStore((s) => s.additions[scene.id])
+  const loadAddition = useScenesStore((s) => s.loadSceneAddition)
+  const setAddition = useScenesStore((s) => s.setSceneAddition)
+  const clearAddition = useScenesStore((s) => s.clearSceneAddition)
+  const characterFolders = useCharactersStore((s) => s.folders)
+  const characters = useCharactersStore((s) => s.items)
+  const loadCharacters = useCharactersStore((s) => s.load)
+  const toggleCharacterFolder = useCharactersStore((s) => s.toggleCollapse)
+  const charRefFolders = useCharRefsStore((s) => s.folders)
+  const charRefs = useCharRefsStore((s) => s.items)
+  const loadCharRefs = useCharRefsStore((s) => s.load)
+  const toggleCharRefFolder = useCharRefsStore((s) => s.toggleCollapse)
+  const vibeFolders = useVibesStore((s) => s.folders)
+  const vibes = useVibesStore((s) => s.items)
+  const loadVibes = useVibesStore((s) => s.load)
+  const toggleVibeFolder = useVibesStore((s) => s.toggleCollapse)
+
+  const current: SceneCharacterAddition = stored ?? {
+    sceneId: scene.id,
+    characterPromptIds: [],
+    charRefIds: [],
+    vibeIds: []
+  }
+  const [collapsed, setCollapsed] = useState(false)
+  const empty =
+    !current.characterPromptIds.length && !current.charRefIds.length && !current.vibeIds.length
+
+  useEffect(() => {
+    if (!open) return
+    void loadAddition(scene.id)
+    void loadCharacters()
+    void loadCharRefs()
+    void loadVibes()
+  }, [open, scene.id, loadAddition, loadCharacters, loadCharRefs, loadVibes])
+
+  const save = (patch: Partial<Omit<SceneCharacterAddition, 'sceneId'>>): void => {
+    void setAddition({ ...current, ...patch, sceneId: scene.id })
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        className="max-w-3xl"
+        onClick={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
+      >
+        <div className="border-b border-line px-4 py-3">
+          <DialogTitle>Scene Character Additions</DialogTitle>
+          <DialogDescription>{scene.name}</DialogDescription>
+        </div>
+        <div className="max-h-[70vh] space-y-3 overflow-y-auto p-4">
+          <div className="rounded-lg border border-line bg-paper p-3">
+            <div className="flex items-start gap-2">
+              <button
+                className="mt-0.5 grid size-7 shrink-0 place-items-center rounded-md text-muted hover:bg-surface-2 hover:text-ink"
+                onClick={() => setCollapsed(!collapsed)}
+                title={collapsed ? 'Expand' : 'Collapse'}
+              >
+                {collapsed ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
+              </button>
+              <div className="min-w-0 flex-1">
+                <div className="flex min-h-7 items-center gap-2">
+                  <span className="text-[13px] font-semibold text-ink">{scene.name}</span>
+                  {empty && (
+                    <span className="rounded bg-danger/15 px-2 py-1 text-[11px] text-danger">
+                      empty
+                    </span>
+                  )}
+                </div>
+                <CombinedSelectionSummary
+                  promptIds={current.characterPromptIds}
+                  characters={characters}
+                  onRemovePrompt={(id) =>
+                    save({ characterPromptIds: current.characterPromptIds.filter((v) => v !== id) })
+                  }
+                  charRefIds={current.charRefIds}
+                  charRefs={charRefs}
+                  onRemoveCharRef={(id) =>
+                    save({ charRefIds: current.charRefIds.filter((v) => v !== id) })
+                  }
+                  vibeIds={current.vibeIds}
+                  vibes={vibes}
+                  onRemoveVibe={(id) => save({ vibeIds: current.vibeIds.filter((v) => v !== id) })}
+                />
+              </div>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="text-danger"
+                onClick={() => void clearAddition(scene.id)}
+                title="Clear"
+              >
+                <Trash2 size={13} />
+              </Button>
+            </div>
+            <AnimatePresence initial={false}>
+              {!collapsed && (
+                <motion.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: 'auto', opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
+                  className="mt-3 overflow-hidden"
+                >
+                  <CharacterSelectionList
+                    title="Character Prompts"
+                    selected={current.characterPromptIds}
+                    folders={characterFolders}
+                    items={characters}
+                    showSummary={false}
+                    onToggleFolder={toggleCharacterFolder}
+                    onChange={(characterPromptIds) => save({ characterPromptIds })}
+                  />
+                  <RefSelectionList
+                    title="Character References"
+                    selected={current.charRefIds}
+                    folders={charRefFolders}
+                    items={charRefs}
+                    fallbackPrefix="Reference"
+                    showSummary={false}
+                    onToggleFolder={toggleCharRefFolder}
+                    onChange={(charRefIds) => save({ charRefIds })}
+                  />
+                  <RefSelectionList
+                    title="Vibes"
+                    selected={current.vibeIds}
+                    folders={vibeFolders}
+                    items={vibes}
+                    fallbackPrefix="Vibe"
+                    showSummary={false}
+                    onToggleFolder={toggleVibeFolder}
+                    onChange={(vibeIds) => save({ vibeIds })}
+                  />
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
 
 function MenuItem({
   icon,
