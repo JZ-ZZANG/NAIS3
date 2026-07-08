@@ -4,9 +4,11 @@ import {
   createCharacter,
   createFolder,
   deleteCharacter,
+  duplicateCharacter,
   deleteFolder,
   listCharacters,
   pickCharacterThumbnail,
+  clearCharacterThumbnail,
   renameFolder,
   reorderCharacters,
   setFolderCollapsed,
@@ -19,6 +21,7 @@ import {
   createFragment,
   createFragmentFolder,
   deleteFragment,
+  duplicateFragment,
   deleteFragmentFolder,
   exportTxtFragment,
   exportAllFragmentsZip,
@@ -30,6 +33,7 @@ import {
   setFragmentFolderColor,
   updateFragment
 } from './fragments/repo'
+import { resetSequentialCounters } from './fragments/processor'
 import {
   deleteNaiToken,
   getNaiToken,
@@ -47,9 +51,12 @@ import {
   createPreset,
   renamePreset,
   deletePreset,
+  reorderPresets,
+  setPresetDefaultResolution,
   listScenes,
   createScene,
   getScene,
+  getPresetName,
   updateScene,
   duplicateScene,
   deleteScene,
@@ -63,6 +70,7 @@ import {
   bulkClearImages,
   bulkExportZip,
   sceneImages,
+  deleteNonFavorites,
   setImageFavorite,
   deleteImage,
   clearAllImages,
@@ -87,7 +95,8 @@ import {
   listPromptPresets,
   createPromptPreset,
   updatePromptPreset,
-  deletePromptPreset
+  deletePromptPreset,
+  reorderPromptPresets
 } from './prompts/repo'
 import { exportAll, importAll } from './backup/repo'
 import { importNais2 } from './backup/nais2'
@@ -107,8 +116,8 @@ import {
   updateRefImage
 } from './refs/repo'
 import { searchTags } from './tags'
-import { imagesRoot, isUnderImagesRoot, defaultImagesRoot } from './images/storage'
-import { copyFileSync, readFileSync, writeFileSync } from 'fs'
+import { imagesRoot, isUnderImagesRoot, sceneDir, scenesRoot } from './images/storage'
+import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'fs'
 import { basename } from 'path'
 import sharp from 'sharp'
 import { verifyToken } from './nai/client'
@@ -179,16 +188,35 @@ export function registerIpcHandlers(ctx: { dbVersion: number; queue: GenerationQ
   handle('scenePresets:delete', ({ id }) => {
     deletePreset(id)
   })
+  handle('scenePresets:reorder', ({ ids }) => {
+    reorderPresets(ids)
+  })
+  handle('scenePresets:setDefaultResolution', ({ id, width, height }) => {
+    setPresetDefaultResolution(id, width, height)
+  })
+  handle('scenes:openFolder', ({ sceneId }) => {
+    const scene = getScene(sceneId)
+    if (!scene) return { ok: false }
+    const dir = sceneDir(getPresetName(scene.presetId), scene.name, scene.id)
+    if (!existsSync(dir)) return { ok: false }
+    void shell.openPath(dir)
+    return { ok: true }
+  })
+  handle('chars:duplicate', ({ id }) => ({ id: duplicateCharacter(id) }))
+  handle('frags:duplicate', ({ id }) => ({ id: duplicateFragment(id) }))
 
   handle('promptPresets:list', () => ({ items: listPromptPresets() }))
-  handle('promptPresets:create', ({ name, prompt, negativePrompt }) => ({
-    id: createPromptPreset(name, prompt, negativePrompt)
+  handle('promptPresets:create', ({ name, prompt, negativePrompt, params }) => ({
+    id: createPromptPreset(name, prompt, negativePrompt, params)
   }))
   handle('promptPresets:update', ({ id, patch }) => {
     updatePromptPreset(id, patch)
   })
   handle('promptPresets:delete', ({ id }) => {
     deletePromptPreset(id)
+  })
+  handle('promptPresets:reorder', ({ ids }) => {
+    reorderPromptPresets(ids)
   })
 
   handle('update:start', () => {
@@ -277,12 +305,17 @@ export function registerIpcHandlers(ctx: { dbVersion: number; queue: GenerationQ
   })
   handle('scenes:bulkClearImages', ({ ids }) => ({ deleted: bulkClearImages(ids) }))
   handle('scenes:bulkExportZip', async ({ ids }) => ({ count: await bulkExportZip(ids) }))
-  handle('scenes:images', ({ sceneId, limit, offset }) => sceneImages(sceneId, limit, offset))
+  handle('scenes:images', ({ sceneId, limit, offset, favoritesOnly }) =>
+    sceneImages(sceneId, limit, offset, favoritesOnly)
+  )
+  handle('scenes:deleteNonFavorites', ({ sceneId }) => ({
+    deleted: deleteNonFavorites(sceneId)
+  }))
   handle('images:setFavorite', ({ id, favorite }) => {
     setImageFavorite(id, favorite)
   })
-  handle('images:delete', ({ id }) => {
-    deleteImage(id)
+  handle('images:delete', ({ id, deleteFile }) => {
+    deleteImage(id, deleteFile === true)
   })
   handle('images:clearAll', () => ({ count: clearAllImages() }))
   handle('scenes:exportJson', async ({ presetId }) => ({ saved: await exportScenesJson(presetId) }))
@@ -328,6 +361,9 @@ export function registerIpcHandlers(ctx: { dbVersion: number; queue: GenerationQ
   handle('chars:pickThumbnail', async ({ id }) => ({
     thumbnail: await pickCharacterThumbnail(id)
   }))
+  handle('chars:clearThumbnail', ({ id }) => {
+    clearCharacterThumbnail(id)
+  })
   handle('chars:reorder', ({ order }) => {
     reorderCharacters(order)
   })
@@ -356,6 +392,9 @@ export function registerIpcHandlers(ctx: { dbVersion: number; queue: GenerationQ
   handle('frags:importTxt', async () => ({ count: await importTxtFragments() }))
   handle('frags:exportTxt', async ({ id }) => ({ saved: await exportTxtFragment(id) }))
   handle('frags:exportAll', async () => ({ count: await exportAllFragmentsZip() }))
+  handle('frags:resetSequential', () => {
+    resetSequentialCounters()
+  })
   handle('frags:reorder', ({ order }) => {
     reorderFragments(order)
   })
@@ -401,23 +440,31 @@ export function registerIpcHandlers(ctx: { dbVersion: number; queue: GenerationQ
     return { copied: true }
   })
 
-  handle('settings:getSaveDir', () => ({
-    dir: imagesRoot(),
-    isDefault: imagesRoot() === defaultImagesRoot()
-  }))
-  handle('settings:pickSaveDir', async () => {
+  const saveDirKey = (target?: 'main' | 'scene'): string =>
+    target === 'scene' ? 'scene_save_dir' : 'save_dir'
+  const saveDirOf = (target?: 'main' | 'scene'): string =>
+    target === 'scene' ? scenesRoot() : imagesRoot()
+
+  handle('settings:getSaveDir', (req) => {
+    const target = req?.target
+    return {
+      dir: saveDirOf(target),
+      isDefault: !getSetting(saveDirKey(target))?.trim()
+    }
+  })
+  handle('settings:pickSaveDir', async (req) => {
     const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
     const result = await dialog.showOpenDialog(win, {
-      title: '저장 폴더 선택',
+      title: req?.target === 'scene' ? '씬 저장 폴더 선택' : '저장 폴더 선택',
       properties: ['openDirectory', 'createDirectory']
     })
     if (result.canceled || result.filePaths.length === 0) return { dir: null }
-    setSetting('save_dir', result.filePaths[0])
+    setSetting(saveDirKey(req?.target), result.filePaths[0])
     return { dir: result.filePaths[0] }
   })
-  handle('settings:resetSaveDir', () => {
-    setSetting('save_dir', '')
-    return { dir: defaultImagesRoot() }
+  handle('settings:resetSaveDir', (req) => {
+    setSetting(saveDirKey(req?.target), '')
+    return { dir: saveDirOf(req?.target) }
   })
   handle('gen:setDelay', ({ ms }) => {
     ctx.queue.setDelayMs(ms)
@@ -433,18 +480,24 @@ export function registerIpcHandlers(ctx: { dbVersion: number; queue: GenerationQ
       }
       if (filePath) {
         if (!isUnderImagesRoot(filePath)) return { error: '허용되지 않은 경로' }
-        // 1) PNG tEXt 우선
-        const buf = readFileSync(filePath)
-        const fromPng = await metadataFromPng(buf)
-        if (fromPng) return { meta: fromPng }
-        // 2) 폴백: DB payload_json (우리 스트리밍 이미지는 tEXt가 없을 수 있음)
         const row = getDb()
           .prepare('SELECT payload_json FROM images WHERE file_path = ?')
           .get(filePath) as { payload_json: string } | undefined
-        if (row?.payload_json) {
-          const meta = metadataFromPayloadJson(row.payload_json)
-          if (meta) return { meta }
+        const fromDb = row?.payload_json ? metadataFromPayloadJson(row.payload_json) : null
+        // 1) PNG tEXt 우선. 단, 예전 저장본/포맷 변환본처럼 nais3-params 청크가 빠진 경우
+        // DB payload_json의 NAIS3 로컬 메타데이터(promptParts)를 합쳐서 3분할을 복원한다.
+        const buf = readFileSync(filePath)
+        const fromPng = await metadataFromPng(buf)
+        if (fromPng) {
+          return {
+            meta:
+              !fromPng.promptParts && fromDb?.promptParts
+                ? { ...fromPng, promptParts: fromDb.promptParts }
+                : fromPng
+          }
         }
+        // 2) 폴백: DB payload_json (우리 스트리밍 이미지는 tEXt가 없을 수 있음)
+        if (fromDb) return { meta: fromDb }
         return { error: '메타데이터를 찾지 못했습니다' }
       }
       return { error: '입력이 없습니다' }

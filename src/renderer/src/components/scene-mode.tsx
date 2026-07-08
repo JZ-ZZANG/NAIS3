@@ -7,6 +7,7 @@ import {
   FileDown,
   FileUp,
   FolderArchive,
+  FolderOpen,
   ImageOff,
   Loader2,
   Minus,
@@ -55,10 +56,19 @@ import { askConfirm, askText } from '../stores/dialog-store'
 import { toast } from '../stores/toast-store'
 import { buildDisplayRows } from '../lib/folder-list'
 import { cn } from '../lib/utils'
+import { ResolutionPicker } from './resolution-picker'
 import { SceneDetail } from './scene-detail'
+import { SortableList, SortableRow } from './sortable-list'
 import { Button } from './ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from './ui/dialog'
 import { Input } from './ui/input'
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger
+} from './ui/context-menu'
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select'
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip'
@@ -85,11 +95,20 @@ function PresetDropdown(): React.JSX.Element {
   const createPreset = useScenesStore((s) => s.createPreset)
   const renamePreset = useScenesStore((s) => s.renamePreset)
   const deletePreset = useScenesStore((s) => s.deletePreset)
+  const reorderPresets = useScenesStore((s) => s.reorderPresets)
+  const setPresetDefaultResolution = useScenesStore((s) => s.setPresetDefaultResolution)
+  const [open, setOpen] = useState(false)
 
   const active = presets.find((p) => p.id === activePresetId)
 
+  // 프리셋 선택 + 닫기 — 닫기를 먼저 (선택의 store 재렌더가 끼어들기 전에 확정) (B9)
+  const choose = (id: number): void => {
+    setOpen(false)
+    void setActivePreset(id)
+  }
+
   return (
-    <Popover>
+    <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button className="flex h-8 min-w-52 items-center gap-1.5 rounded-md border border-line bg-paper px-2.5 text-[13px] font-medium hover:bg-surface-2">
           <span className="min-w-0 flex-1 truncate text-left">{active?.name ?? '프리셋'}</span>
@@ -97,49 +116,66 @@ function PresetDropdown(): React.JSX.Element {
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-[var(--radix-popover-trigger-width)] p-1">
-        <div className="max-h-64 overflow-y-auto">
-          {presets.map((p) => (
-            <div key={p.id} className="group flex items-center gap-1">
-              <button
-                onClick={() => void setActivePreset(p.id)}
-                className={cn(
-                  'flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-surface-2',
-                  p.id === activePresetId && 'font-semibold text-accent'
-                )}
-              >
-                <span className="truncate">{p.name}</span>
-              </button>
-              <button
-                className="shrink-0 rounded p-1 text-faint opacity-0 hover:text-fg group-hover:opacity-100"
-                onClick={async () => {
-                  const name = await askText('프리셋 이름', p.name)
-                  if (name) void renamePreset(p.id, name)
-                }}
-                title="이름 변경"
-              >
-                <Pencil size={12} />
-              </button>
-              {presets.length > 1 && (
-                <button
-                  className="shrink-0 rounded p-1 text-faint opacity-0 hover:text-danger group-hover:opacity-100"
-                  onClick={async () => {
-                    if (
-                      await askConfirm('프리셋 삭제', {
-                        message: `"${p.name}" 프리셋과 그 안의 씬을 모두 삭제합니다.`,
-                        confirmLabel: '삭제',
-                        danger: true
-                      })
-                    )
-                      void deletePreset(p.id)
-                  }}
-                  title="삭제"
+        <div className="max-h-64 overflow-y-auto overflow-x-hidden no-scrollbar">
+          {/* 드래그로 순서 변경 */}
+          <SortableList ids={presets.map((p) => p.id)} onReorder={(ids) => void reorderPresets(ids)}>
+            {presets.map((p) => (
+              <SortableRow key={p.id} id={p.id} className="group gap-1" onTap={() => choose(p.id)}>
+                <div
+                  onClick={() => choose(p.id)}
+                  className={cn(
+                    'flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px]',
+                    p.id === activePresetId && 'font-semibold text-accent'
+                  )}
                 >
-                  <Trash2 size={12} />
+                  <span className="truncate">{p.name}</span>
+                </div>
+                <button
+                  className="shrink-0 rounded p-1 text-faint opacity-0 hover:text-fg group-hover:opacity-100"
+                  onClick={async () => {
+                    const name = await askText('프리셋 이름', p.name)
+                    if (name) void renamePreset(p.id, name)
+                  }}
+                  title="이름 변경"
+                >
+                  <Pencil size={12} />
                 </button>
-              )}
-            </div>
-          ))}
+                {presets.length > 1 && (
+                  <button
+                    className="shrink-0 rounded p-1 text-faint opacity-0 hover:text-danger group-hover:opacity-100"
+                    onClick={async () => {
+                      if (
+                        await askConfirm('프리셋 삭제', {
+                          message: `"${p.name}" 프리셋과 그 안의 씬을 모두 삭제합니다.`,
+                          confirmLabel: '삭제',
+                          danger: true
+                        })
+                      )
+                        void deletePreset(p.id)
+                    }}
+                    title="삭제"
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                )}
+              </SortableRow>
+            ))}
+          </SortableList>
         </div>
+        <div className="my-1 h-px bg-line" />
+        {/* 활성 프리셋의 새 씬 기본 해상도 (N3) */}
+        {active && (
+          <div className="flex items-center gap-2 px-2 py-1.5 text-[12px] text-muted">
+            <span className="shrink-0">새 씬 기본 해상도</span>
+            <div className="flex-1" />
+            <ResolutionPicker
+              className="w-40"
+              width={active.defaultWidth ?? 832}
+              height={active.defaultHeight ?? 1216}
+              onPick={(w, h) => void setPresetDefaultResolution(active.id, w, h)}
+            />
+          </div>
+        )}
         <div className="my-1 h-px bg-line" />
         <button
           className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] text-accent hover:bg-surface-2"
@@ -304,7 +340,7 @@ function SceneGrid(): React.JSX.Element {
         <div className="mx-1 h-5 w-px bg-line" />
         <IconBtn
           icon={<Repeat2 size={16} />}
-          tip="Character queue repeat"
+          tip="캐릭터 큐 반복"
           active={generationOptions.sequenceEnabled}
           onClick={() =>
             void setGenerationOptions({ sequenceEnabled: !generationOptions.sequenceEnabled })
@@ -312,12 +348,12 @@ function SceneGrid(): React.JSX.Element {
         />
         <IconBtn
           icon={<Settings2 size={16} />}
-          tip="Repeat settings"
+          tip="반복 설정"
           onClick={() => setSequenceOpen(true)}
         />
         <IconBtn
           icon={<UserPlus size={16} />}
-          tip="Scene character additions"
+          tip="씬별 캐릭터 추가"
           active={generationOptions.additionsEnabled}
           onClick={() =>
             void setGenerationOptions({ additionsEnabled: !generationOptions.additionsEnabled })
@@ -502,14 +538,14 @@ function SequenceSettingsDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-3xl">
         <div className="border-b border-line px-4 py-3">
-          <DialogTitle>Character / Reference Queue Repeat</DialogTitle>
+          <DialogTitle>캐릭터 / 레퍼런스 큐 반복</DialogTitle>
           <DialogDescription>
-            Repeat the reserved scene queue with selected characters and references.
+            예약된 씬 큐를 선택한 캐릭터와 레퍼런스로 반복합니다.
           </DialogDescription>
         </div>
         <div className="max-h-[70vh] space-y-3 overflow-y-auto p-4">
           <Button size="sm" onClick={() => void createEntry()}>
-            <Plus size={14} /> Add Item
+            <Plus size={14} /> 항목 추가
           </Button>
           {entries.map((entry, index) => (
             <SequenceEntryEditor
@@ -529,7 +565,7 @@ function SequenceSettingsDialog({
               onDelete={() => void deleteEntry(entry.id)}
             />
           ))}
-          {entries.length === 0 && <p className="text-[13px] text-faint">No repeat items.</p>}
+          {entries.length === 0 && <p className="text-[13px] text-faint">반복 항목이 없습니다.</p>}
         </div>
       </DialogContent>
     </Dialog>
@@ -576,16 +612,16 @@ function SequenceEntryEditor({
         <button
           className="mt-0.5 grid size-7 shrink-0 place-items-center rounded-md text-muted hover:bg-surface-2 hover:text-ink"
           onClick={() => setCollapsed(!collapsed)}
-          title={collapsed ? 'Expand' : 'Collapse'}
+          title={collapsed ? '펼치기' : '접기'}
         >
           {collapsed ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
         </button>
         <div className="min-w-0 flex-1">
           <div className="flex min-h-7 items-center gap-2">
-            <span className="text-[13px] font-semibold text-ink">Repeat {index + 1}</span>
+            <span className="text-[13px] font-semibold text-ink">반복 {index + 1}</span>
             {empty && (
               <span className="rounded bg-danger/15 px-2 py-1 text-[11px] text-danger">
-                empty
+                비어 있음
               </span>
             )}
           </div>
@@ -610,7 +646,7 @@ function SequenceEntryEditor({
           variant={entry.enabled ? 'default' : 'ghost'}
           onClick={() => onUpdate({ enabled: !entry.enabled })}
         >
-          {entry.enabled ? 'On' : 'Off'}
+          {entry.enabled ? '켬' : '끔'}
         </Button>
         <Button size="sm" variant="ghost" className="text-danger" onClick={onDelete}>
           <Trash2 size={13} />
@@ -626,7 +662,7 @@ function SequenceEntryEditor({
             className="mt-3 overflow-hidden"
           >
             <CharacterSelectionList
-              title="Character Prompts"
+              title="캐릭터 프롬프트"
               selected={entry.characterPromptIds}
               folders={characterFolders}
               items={characters}
@@ -635,21 +671,21 @@ function SequenceEntryEditor({
               onChange={(characterPromptIds) => onUpdate({ characterPromptIds })}
             />
             <RefSelectionList
-              title="Character References"
+              title="캐릭터 레퍼런스"
               selected={entry.charRefIds}
               folders={charRefFolders}
               items={charRefs}
-              fallbackPrefix="Reference"
+              fallbackPrefix="레퍼런스"
               showSummary={false}
               onToggleFolder={onToggleCharRefFolder}
               onChange={(charRefIds) => onUpdate({ charRefIds })}
             />
             <RefSelectionList
-              title="Vibes"
+              title="바이브"
               selected={entry.vibeIds}
               folders={vibeFolders}
               items={vibes}
-              fallbackPrefix="Vibe"
+              fallbackPrefix="바이브"
               showSummary={false}
               onToggleFolder={onToggleVibeFolder}
               onChange={(vibeIds) => onUpdate({ vibeIds })}
@@ -662,7 +698,7 @@ function SequenceEntryEditor({
 }
 
 function characterLabel(item: CharacterCard): string {
-  return item.name || item.prompt.split(',')[0]?.trim() || `Character ${item.id}`
+  return item.name || item.prompt.split(',')[0]?.trim() || `캐릭터 ${item.id}`
 }
 
 function refLabel<T extends CharRefItem | VibeItem>(item: T, prefix: string): string {
@@ -731,7 +767,7 @@ function CombinedSelectionSummary({
     .filter((item): item is VibeItem => Boolean(item))
 
   if (!prompts.length && !refs.length && !vibeItems.length) {
-    return <p className="text-[12px] text-faint">No items selected.</p>
+    return <p className="text-[12px] text-faint">선택한 항목이 없습니다.</p>
   }
 
   return (
@@ -740,7 +776,7 @@ function CombinedSelectionSummary({
         <SummaryChip
           key={`prompt-${item.id}`}
           tone="prompt"
-          label={`Prompt - ${characterLabel(item)}`}
+          label={`프롬프트 - ${characterLabel(item)}`}
           onRemove={() => onRemovePrompt(item.id)}
         />
       ))}
@@ -748,7 +784,7 @@ function CombinedSelectionSummary({
         <SummaryChip
           key={`ref-${item.id}`}
           tone="ref"
-          label={`Ref - ${refLabel(item, 'Reference')}`}
+          label={`레퍼런스 - ${refLabel(item, '레퍼런스')}`}
           onRemove={() => onRemoveCharRef(item.id)}
         />
       ))}
@@ -756,18 +792,9 @@ function CombinedSelectionSummary({
         <SummaryChip
           key={`vibe-${item.id}`}
           tone="vibe"
-          label={`Vibe - ${refLabel(item, 'Vibe')}`}
+          label={`바이브 - ${refLabel(item, '바이브')}`}
           onRemove={() => onRemoveVibe(item.id)}
         />
-      ))}
-      {prompts.map((item) => (
-        <SummaryChip key={`p-${item.id}`} tone="prompt" label={`Prompt · ${characterLabel(item)}`} />
-      ))}
-      {refs.map((item) => (
-        <SummaryChip key={`r-${item.id}`} tone="ref" label={`Ref · ${refLabel(item, 'Reference')}`} />
-      ))}
-      {vibeItems.map((item) => (
-        <SummaryChip key={`v-${item.id}`} tone="vibe" label={`Vibe · ${refLabel(item, 'Vibe')}`} />
       ))}
     </div>
   )
@@ -797,7 +824,7 @@ function SelectionSummary<T extends { id: number }>({
           key={item.id}
           className="flex max-w-52 items-center gap-1 rounded bg-paper px-1.5 py-1 text-[11px] text-accent shadow-sm"
           onClick={() => onRemove(item.id)}
-          title="Remove"
+          title="제거"
         >
           <span className="truncate">{labelFor(item)}</span>
           <span className="text-faint">x</span>
@@ -853,7 +880,7 @@ function CharacterSelectionList({
           <Input
             className="h-7 pl-7 text-[12px]"
             value={search}
-            placeholder="Search"
+            placeholder="검색"
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
@@ -908,13 +935,13 @@ function CharacterSelectionList({
                   {characterLabel(row.item)}
                 </span>
                 <span className="block truncate text-[11px] text-faint">
-                  {row.item.prompt || row.item.negativePrompt || 'Empty prompt'}
+                  {row.item.prompt || row.item.negativePrompt || '빈 프롬프트'}
                 </span>
               </span>
             </button>
           )
         })}
-        {rows.length === 0 && <p className="px-2 py-2 text-[12px] text-faint">No items.</p>}
+        {rows.length === 0 && <p className="px-2 py-2 text-[12px] text-faint">항목이 없습니다.</p>}
       </div>
     </div>
   )
@@ -965,7 +992,7 @@ function RefSelectionList<T extends CharRefItem | VibeItem>({
           <Input
             className="h-7 pl-7 text-[12px]"
             value={search}
-            placeholder="Search"
+            placeholder="검색"
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
@@ -1023,7 +1050,7 @@ function RefSelectionList<T extends CharRefItem | VibeItem>({
           )
         })}
         {rows.length === 0 && (
-          <p className="col-span-2 px-2 py-2 text-[12px] text-faint">No items.</p>
+          <p className="col-span-2 px-2 py-2 text-[12px] text-faint">항목이 없습니다.</p>
         )}
       </div>
     </div>
@@ -1194,7 +1221,29 @@ const SceneCard = memo(function SceneCard({
         ? imageUrl(scene.thumbnailPath)
         : null
 
+  // 우클릭 메뉴/3-dot 공용 액션
+  const renameScene = async (): Promise<void> => {
+    const name = await askText('씬 이름', scene.name)
+    if (name) void update(scene.id, { name })
+  }
+  const openFolder = async (): Promise<void> => {
+    const { ok } = await window.nais.invoke('scenes:openFolder', { sceneId: scene.id })
+    if (!ok) toast('아직 생성된 이미지 폴더가 없습니다', 'info')
+  }
+  const removeScene = async (): Promise<void> => {
+    if (
+      await askConfirm('씬 삭제', {
+        message: `"${scene.name}" 씬을 삭제합니다.`,
+        confirmLabel: '삭제',
+        danger: true
+      })
+    )
+      void remove(scene.id)
+  }
+
   return (
+    <ContextMenu>
+    <ContextMenuTrigger asChild>
     <div
       ref={sortable.setNodeRef}
       {...sortable.attributes}
@@ -1260,10 +1309,7 @@ const SceneCard = memo(function SceneCard({
             <MenuItem
               icon={<Pencil size={13} />}
               label="이름 변경"
-              onClick={async () => {
-                const name = await askText('씬 이름', scene.name)
-                if (name) void update(scene.id, { name })
-              }}
+              onClick={() => void renameScene()}
             />
             <MenuItem
               icon={<Copy size={13} />}
@@ -1271,19 +1317,15 @@ const SceneCard = memo(function SceneCard({
               onClick={() => void duplicate(scene.id)}
             />
             <MenuItem
+              icon={<FolderOpen size={13} />}
+              label="폴더 열기"
+              onClick={() => void openFolder()}
+            />
+            <MenuItem
               icon={<Trash2 size={13} />}
               label="삭제"
               danger
-              onClick={async () => {
-                if (
-                  await askConfirm('씬 삭제', {
-                    message: `"${scene.name}" 씬을 삭제합니다.`,
-                    confirmLabel: '삭제',
-                    danger: true
-                  })
-                )
-                  void remove(scene.id)
-              }}
+              onClick={() => void removeScene()}
             />
           </PopoverContent>
         </Popover>
@@ -1345,6 +1387,23 @@ const SceneCard = memo(function SceneCard({
       </div>
       <SceneAdditionDialog scene={scene} open={additionOpen} onOpenChange={setAdditionOpen} />
     </div>
+    </ContextMenuTrigger>
+    <ContextMenuContent>
+      <ContextMenuItem onSelect={() => void renameScene()}>
+        <Pencil size={13} /> 이름 변경
+      </ContextMenuItem>
+      <ContextMenuItem onSelect={() => void duplicate(scene.id)}>
+        <Copy size={13} /> 복제
+      </ContextMenuItem>
+      <ContextMenuItem onSelect={() => void openFolder()}>
+        <FolderOpen size={13} className="text-amber-400" /> 폴더 열기
+      </ContextMenuItem>
+      <ContextMenuSeparator />
+      <ContextMenuItem danger onSelect={() => void removeScene()}>
+        <Trash2 size={13} /> 삭제
+      </ContextMenuItem>
+    </ContextMenuContent>
+    </ContextMenu>
   )
 })
 /* eslint-enable react-hooks/refs */
@@ -1405,7 +1464,7 @@ function SceneAdditionDialog({
         onPointerDown={(e) => e.stopPropagation()}
       >
         <div className="border-b border-line px-4 py-3">
-          <DialogTitle>Scene Character Additions</DialogTitle>
+          <DialogTitle>씬별 캐릭터 추가</DialogTitle>
           <DialogDescription>{scene.name}</DialogDescription>
         </div>
         <div className="max-h-[70vh] space-y-3 overflow-y-auto p-4">
@@ -1414,7 +1473,7 @@ function SceneAdditionDialog({
               <button
                 className="mt-0.5 grid size-7 shrink-0 place-items-center rounded-md text-muted hover:bg-surface-2 hover:text-ink"
                 onClick={() => setCollapsed(!collapsed)}
-                title={collapsed ? 'Expand' : 'Collapse'}
+                title={collapsed ? '펼치기' : '접기'}
               >
                 {collapsed ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
               </button>
@@ -1423,7 +1482,7 @@ function SceneAdditionDialog({
                   <span className="text-[13px] font-semibold text-ink">{scene.name}</span>
                   {empty && (
                     <span className="rounded bg-danger/15 px-2 py-1 text-[11px] text-danger">
-                      empty
+                      비어 있음
                     </span>
                   )}
                 </div>
@@ -1448,7 +1507,7 @@ function SceneAdditionDialog({
                 variant="ghost"
                 className="text-danger"
                 onClick={() => void clearAddition(scene.id)}
-                title="Clear"
+                title="비우기"
               >
                 <Trash2 size={13} />
               </Button>
@@ -1463,7 +1522,7 @@ function SceneAdditionDialog({
                   className="mt-3 overflow-hidden"
                 >
                   <CharacterSelectionList
-                    title="Character Prompts"
+                    title="캐릭터 프롬프트"
                     selected={current.characterPromptIds}
                     folders={characterFolders}
                     items={characters}
@@ -1472,21 +1531,21 @@ function SceneAdditionDialog({
                     onChange={(characterPromptIds) => save({ characterPromptIds })}
                   />
                   <RefSelectionList
-                    title="Character References"
+                    title="캐릭터 레퍼런스"
                     selected={current.charRefIds}
                     folders={charRefFolders}
                     items={charRefs}
-                    fallbackPrefix="Reference"
+                    fallbackPrefix="레퍼런스"
                     showSummary={false}
                     onToggleFolder={toggleCharRefFolder}
                     onChange={(charRefIds) => save({ charRefIds })}
                   />
                   <RefSelectionList
-                    title="Vibes"
+                    title="바이브"
                     selected={current.vibeIds}
                     folders={vibeFolders}
                     items={vibes}
-                    fallbackPrefix="Vibe"
+                    fallbackPrefix="바이브"
                     showSummary={false}
                     onToggleFolder={toggleVibeFolder}
                     onChange={(vibeIds) => save({ vibeIds })}

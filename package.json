@@ -1,11 +1,11 @@
 {
   "name": "nais3",
-  "version": "1.0.5-c.1",
+  "version": "1.0.7-c.1",
   "description": "NAIS3 - NovelAI Image Studio 3",
   "main": "./out/main/index.js",
-  "author": "JZ-ZZANG",
+  "author": "sunanakgo",
   "license": "GPL-3.0",
-  "homepage": "https://github.com/JZ-ZZANG/NAIS3",
+  "homepage": "https://github.com/sunanakgo/NAIS3",
   "scripts": {
     "format": "prettier --write .",
     "lint": "eslint --cache .",

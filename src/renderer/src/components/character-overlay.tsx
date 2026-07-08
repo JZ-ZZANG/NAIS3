@@ -1,4 +1,16 @@
-import { Crosshair, FolderPlus, ImagePlus, Plus, Search, Trash2, UserRound, X } from 'lucide-react'
+import {
+  Copy,
+  Crosshair,
+  FolderPlus,
+  ImageOff,
+  ImagePlus,
+  Pencil,
+  Plus,
+  Search,
+  Trash2,
+  UserRound,
+  X
+} from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { CharacterCard } from '@shared/types'
@@ -6,8 +18,10 @@ import { cn } from '../lib/utils'
 import { buildDisplayRows } from '../lib/folder-list'
 import { useCharactersStore, MAX_CHARACTERS } from '../stores/characters-store'
 import { useGenerationStore } from '../stores/generation-store'
+import { askText } from '../stores/dialog-store'
 import { FolderListView } from './folder-list-view'
 import { PromptEditor } from './prompt-editor'
+import { ContextMenuItem, ContextMenuSeparator } from './ui/context-menu'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
@@ -50,7 +64,9 @@ export function CharacterOverlay(): React.JSX.Element {
   const updateCard = useCharactersStore((s) => s.updateCard)
   const disableAll = useCharactersStore((s) => s.disableAll)
   const removeCard = useCharactersStore((s) => s.removeCard)
+  const duplicateCard = useCharactersStore((s) => s.duplicateCard)
   const pickThumbnail = useCharactersStore((s) => s.pickThumbnail)
+  const clearThumbnail = useCharactersStore((s) => s.clearThumbnail)
   const createFolder = useCharactersStore((s) => s.createFolder)
   const renameFolder = useCharactersStore((s) => s.renameFolder)
   const toggleCollapse = useCharactersStore((s) => s.toggleCollapse)
@@ -63,16 +79,21 @@ export function CharacterOverlay(): React.JSX.Element {
   const [search, setSearch] = useState('')
   const [expandedId, setExpandedId] = useState<number | null>(null)
   /** 썸네일 호버 미리보기 — 카드 오른쪽 바깥에 고정 위치로 (카드 내용을 가리지 않게) */
-  const [hoverPreview, setHoverPreview] = useState<{ src: string; top: number; left: number } | null>(
-    null
-  )
+  const [hoverPreview, setHoverPreview] = useState<{
+    src: string
+    top: number
+    left: number
+  } | null>(null)
 
   const showPreview = (e: React.MouseEvent, src: string): void => {
     const card = (e.currentTarget as HTMLElement).closest('[data-char-card]')
     if (!card) return
     const rect = card.getBoundingClientRect()
     const size = 176
-    const top = Math.max(8, Math.min(rect.top + rect.height / 2 - size / 2, window.innerHeight - size - 8))
+    const top = Math.max(
+      8,
+      Math.min(rect.top + rect.height / 2 - size / 2, window.innerHeight - size - 8)
+    )
     setHoverPreview({ src, top, left: rect.right + 10 })
   }
 
@@ -94,16 +115,17 @@ export function CharacterOverlay(): React.JSX.Element {
   const basePrompt = useGenerationStore((s) => s.request.prompt)
   const positiveTexts = useMemo(
     () =>
-      [basePrompt, ...items.filter((c) => c.enabled && c.prompt.trim()).map((c) => c.prompt)].filter(
-        (t) => t.trim()
-      ),
+      [
+        basePrompt,
+        ...items.filter((c) => c.enabled && c.prompt.trim()).map((c) => c.prompt)
+      ].filter((t) => t.trim()),
     [basePrompt, items]
   )
   const [charTokens, setCharTokens] = useState<number | null>(null)
   useEffect(() => {
     if (positiveTexts.length === 0) {
-      setCharTokens(null)
-      return
+      const timer = setTimeout(() => setCharTokens(null))
+      return () => clearTimeout(timer)
     }
     const timer = setTimeout(() => {
       void window.nais.invoke('tokens:count', { texts: positiveTexts }).then(({ counts }) => {
@@ -149,7 +171,10 @@ export function CharacterOverlay(): React.JSX.Element {
             </Button>
           </PopoverTrigger>
           <PopoverContent className="w-auto">
-            <PositionPicker center={char.center} onPick={(c) => updateCard(char.id, { center: c })} />
+            <PositionPicker
+              center={char.center}
+              onPick={(c) => updateCard(char.id, { center: c })}
+            />
           </PopoverContent>
         </Popover>
       )}
@@ -165,34 +190,47 @@ export function CharacterOverlay(): React.JSX.Element {
           placeholder="이름"
           onChange={(e) => updateCard(char.id, { name: e.target.value })}
         />
-        <Button
-          size="sm"
-          variant="ghost"
-          className="h-8 gap-1 px-2 text-[12px]"
-          onClick={() => void pickThumbnail(char.id)}
-        >
-          <ImagePlus size={14} /> 이미지
-        </Button>
+        {/* F12: 썸네일이 있으면 "이미지 제거"로 (옆의 캐릭터 삭제와 구분되게 이미지 아이콘 명시) */}
+        {char.thumbnail ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-8 gap-1 px-2 text-[12px] hover:text-danger"
+            title="캐릭터 썸네일 제거"
+            onClick={() => void clearThumbnail(char.id)}
+          >
+            <ImageOff size={14} /> 제거
+          </Button>
+        ) : (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-8 gap-1 px-2 text-[12px]"
+            onClick={() => void pickThumbnail(char.id)}
+          >
+            <ImagePlus size={14} /> 이미지
+          </Button>
+        )}
         <Button
           size="sm"
           variant="ghost"
           className="h-8 w-8 p-0 hover:text-danger"
-          title="삭제"
+          title="캐릭터 삭제"
           onClick={() => removeCard(char.id)}
         >
           <Trash2 size={14} />
         </Button>
       </div>
-      {/* resize-y: 우하단 핸들로 세로 크기 조절 */}
+      {/* resize-y: 우하단 핸들로 세로 크기 조절. 초기 크기 상향 (F11) */}
       <PromptEditor
-        className="h-28 max-h-[420px] min-h-16 resize-y bg-surface-2"
+        className="h-40 max-h-[520px] min-h-20 resize-y bg-surface-2"
         value={char.prompt}
         placeholder="girl, ..."
         onValueChange={(v) => updateCard(char.id, { prompt: v })}
       />
       <PromptEditor
         negative
-        className="h-16 max-h-72 min-h-12 resize-y bg-surface-2"
+        className="h-24 max-h-96 min-h-14 resize-y bg-surface-2"
         value={char.negativePrompt}
         placeholder="캐릭터 네거티브"
         onValueChange={(v) => updateCard(char.id, { negativePrompt: v })}
@@ -203,7 +241,13 @@ export function CharacterOverlay(): React.JSX.Element {
   return (
     <div className="flex h-full flex-col gap-2">
       <div className="flex items-center gap-2">
-        <Button size="icon" variant="ghost" className="h-7 w-7" title="닫기" onClick={() => setOverlayOpen(false)}>
+        <Button
+          size="icon"
+          variant="ghost"
+          className="h-7 w-7"
+          title="닫기"
+          onClick={() => setOverlayOpen(false)}
+        >
           <X size={15} />
         </Button>
         <span className="text-[13px] font-medium">캐릭터</span>
@@ -262,7 +306,12 @@ export function CharacterOverlay(): React.JSX.Element {
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
-        <Button size="sm" variant="ghost" title="폴더 추가" onClick={() => void createFolder('새 폴더')}>
+        <Button
+          size="sm"
+          variant="ghost"
+          title="폴더 추가"
+          onClick={() => void createFolder('새 폴더')}
+        >
           <FolderPlus size={14} />
         </Button>
         <Button size="sm" variant="accent" className="gap-1" onClick={() => void createCard(null)}>
@@ -283,8 +332,33 @@ export function CharacterOverlay(): React.JSX.Element {
             addItem: (folderId) => void createCard(folderId)
           }}
           onMove={move}
+          itemClassName={(char) =>
+            cn(
+              'transition-colors hover:border-muted/60', // F2: 호버 강조
+              char.enabled && 'border-accent/60 bg-accent-soft' // F3: 활성 강조
+            )
+          }
           renderHeader={renderHeader}
           renderExpanded={renderExpanded}
+          itemContextMenu={(char) => (
+            <>
+              <ContextMenuItem
+                onSelect={async () => {
+                  const name = await askText('이름 변경', char.name)
+                  if (name != null) updateCard(char.id, { name })
+                }}
+              >
+                <Pencil size={13} /> 이름 변경
+              </ContextMenuItem>
+              <ContextMenuItem onSelect={() => void duplicateCard(char.id)}>
+                <Copy size={13} /> 복제
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+              <ContextMenuItem danger onSelect={() => removeCard(char.id)}>
+                <Trash2 size={13} /> 삭제
+              </ContextMenuItem>
+            </>
+          )}
           emptyText={items.length === 0 ? '캐릭터를 추가해보세요' : '검색 결과 없음'}
         />
       </div>

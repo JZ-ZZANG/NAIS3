@@ -8,8 +8,9 @@ import { closeDb, initDb } from './db'
 import { getNaiToken } from './db/settings'
 import { getSetting } from './db/settings'
 import { processWildcards } from './fragments/processor'
+import { removeComments } from '../shared/nai-presets'
 import { fragmentSource } from './fragments/repo'
-import { isUnderImagesRoot, libraryRoot, saveGeneratedImage } from './images/storage'
+import { isUnderImagesRoot, saveGeneratedImage } from './images/storage'
 import { broadcast, registerIpcHandlers } from './ipc'
 import { setupUpdater } from './updater'
 import { logBalance } from './nai/anlas-log'
@@ -99,13 +100,15 @@ app.whenReady().then(() => {
   }
 
   // 생성 파이프라인: 큐 → 조각/와일드카드 치환 → 바이브/캐릭레퍼 준비 → 스트리밍 생성 → 저장
-  const queue = new GenerationQueue(async (rawRequest, id) => {
+  const queue = new GenerationQueue(async (rawRequest, id, signal) => {
     const token = getNaiToken()
     if (!token) throw new Error('NAI 토큰이 설정되지 않았습니다')
 
-    // 배치 항목마다 여기서 치환 — 매 장 다른 와일드카드 결과가 나온다
+    // 배치 항목마다 여기서 치환 — 매 장 다른 와일드카드 결과가 나온다.
+    // 주석 제거가 반드시 먼저 — 주석 줄이 조각을 소모하거나(순차 카운터),
+    // 와일드카드 처리의 재조립이 개행을 지워 주석 범위가 전체로 번지는 것 방지 (NAIS2와 동일 순서)
     const fragSource = fragmentSource()
-    const sub = (text: string): string => processWildcards(text, fragSource)
+    const sub = (text: string): string => processWildcards(removeComments(text), fragSource)
     let request = {
       ...rawRequest,
       prompt: sub(rawRequest.prompt),
@@ -167,20 +170,25 @@ app.whenReady().then(() => {
     const streamingOn = getSetting('gen_streaming') !== '0'
     const useZip = !streamingOn
     const { png, sentPayload } = useZip
-      ? await generateImageZip(token, request, buildOpts)
-      : await generateImageStream(token, request, buildOpts, (stepIx, preview) => {
-          broadcast('generation:progress', {
-            id,
-            stepIx,
-            totalSteps: request.steps,
-            previewPng: preview?.toString('base64')
-          })
-        })
+      ? await generateImageZip(token, request, buildOpts, signal)
+      : await generateImageStream(
+          token,
+          request,
+          buildOpts,
+          (stepIx, preview) => {
+            broadcast('generation:progress', {
+              id,
+              stepIx,
+              totalSteps: request.steps,
+              previewPng: preview?.toString('base64')
+            })
+          },
+          signal
+        )
 
-    // 자동 저장 off여도 히스토리엔 남긴다 — 다만 저장 폴더 대신 앱 내부 라이브러리에 저장
-    // (씬은 항상 저장 폴더). 클릭 시 원본 보기·다른 이름으로 저장 모두 정상 동작.
-    const autoSave = getSetting('auto_save') !== '0'
-    // 씬 생성은 저장폴더/씬/<프리셋>/<씬 이름>/에 모아 저장 (NAIS2와 동일 계층)
+    // 자동 저장 off여도 히스토리엔 남긴다 — 저장 폴더 대신 앱 내부 라이브러리로 가는 판정은
+    // saveGeneratedImage가 auto_save 설정을 읽어 처리한다 (씬 포함).
+    // 씬 생성은 씬루트/<프리셋>/<씬 이름>/에 모아 저장 (NAIS2와 동일 계층)
     const scene = request.sceneId ? getScene(request.sceneId) : null
     const saved = await saveGeneratedImage({
       png,
@@ -189,9 +197,16 @@ app.whenReady().then(() => {
       kind: request.sceneId ? 'scene' : source ? (source.maskBase64 ? 'inpaint' : 'i2i') : 't2i',
       sceneId: request.sceneId,
       format: imageFormat,
-      baseDir: !autoSave && !request.sceneId ? libraryRoot() : undefined,
       sceneName: scene?.name,
-      scenePresetName: scene ? (getPresetName(scene.presetId) ?? undefined) : undefined
+      scenePresetName: scene ? (getPresetName(scene.presetId) ?? undefined) : undefined,
+      localMetadata: request.promptParts
+        ? {
+            promptParts: {
+              ...request.promptParts,
+              negative: request.negativePrompt
+            }
+          }
+        : undefined
     })
 
     // 씬 생성이면 해당 씬 갱신 알림 (목록 썸네일/개수, 상세 이미지 갱신용)

@@ -58,12 +58,24 @@ function uniqueName(name: string): string {
   }
 }
 
+/** 자기 자신 제외 유니크 — 이름 편집 중 다른 조각과 겹쳐도 UNIQUE 에러로 유실되지 않게 */
+function uniqueNameExcept(name: string, selfId: number): string {
+  const db = getDb()
+  const exists = (n: string): boolean =>
+    db.prepare('SELECT 1 FROM fragments WHERE name = ? AND id != ?').get(n, selfId) !== undefined
+  if (!exists(name)) return name
+  for (let i = 2; ; i++) {
+    if (!exists(`${name}-${i}`)) return `${name}-${i}`
+  }
+}
+
 export function updateFragment(id: number, patch: { name?: string; content?: string }): void {
   const sets: string[] = []
   const values: unknown[] = []
   if (patch.name !== undefined) {
     sets.push('name = ?')
-    values.push(patch.name)
+    // 타이핑 중간값이 다른 조각 이름과 겹치면 UNIQUE 에러로 업데이트가 유실되던 버그 방지
+    values.push(uniqueNameExcept(patch.name, id))
   }
   if (patch.content !== undefined) {
     sets.push('content = ?')
@@ -78,6 +90,15 @@ export function updateFragment(id: number, patch: { name?: string; content?: str
 
 export function deleteFragment(id: number): void {
   getDb().prepare('DELETE FROM fragments WHERE id = ?').run(id)
+}
+
+/** 조각 복제 (이름 중복은 uniqueName이 -2 등으로 처리) */
+export function duplicateFragment(id: number): number | null {
+  const r = getDb()
+    .prepare('SELECT name, content, folder_id FROM fragments WHERE id = ?')
+    .get(id) as { name: string; content: string; folder_id: number | null } | undefined
+  if (!r) return null
+  return createFragment(`${r.name} 복사`, r.folder_id, r.content)
 }
 
 export function reorderFragments(order: CharacterOrderEntry[]): void {
@@ -130,12 +151,15 @@ export function deleteFragmentFolder(id: number): void {
   })()
 }
 
-/** content → 치환용 줄 목록 (빈 줄·# 주석 제외 — NAIS2 importFromText와 동일 규칙) */
+/** content → 치환용 줄 목록. #부터 줄 끝까지 주석(프롬프트와 동일 규칙), 빈 줄 제외 */
 export function contentToLines(content: string): string[] {
   return content
     .split('\n')
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0 && !l.startsWith('#'))
+    .map((l) => {
+      const i = l.indexOf('#')
+      return (i === -1 ? l : l.slice(0, i)).trim()
+    })
+    .filter((l) => l.length > 0)
 }
 
 /** 치환기에 물릴 조회 소스 — 생성 시점마다 DB에서 신선하게 읽는다 */

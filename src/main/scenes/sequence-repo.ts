@@ -127,7 +127,7 @@ export function createSceneSequenceEntry(name?: string): number {
   return Number(
     db
       .prepare('INSERT INTO scene_sequence_entries (name, sort_order) VALUES (?, ?)')
-      .run(name?.trim() || `Queue Repeat ${max.m + 1}`, max.m + 1).lastInsertRowid
+      .run(name?.trim() || `큐 반복 ${max.m + 1}`, max.m + 1).lastInsertRowid
   )
 }
 

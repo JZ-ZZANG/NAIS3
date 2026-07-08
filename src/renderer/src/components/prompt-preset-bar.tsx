@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { ChevronDown, Pencil, Plus, Trash2 } from 'lucide-react'
-import { usePromptPresetsStore } from '../stores/prompt-presets-store'
+import { pickPresetParams, usePromptPresetsStore } from '../stores/prompt-presets-store'
 import { useGenerationStore } from '../stores/generation-store'
 import { askConfirm, askText } from '../stores/dialog-store'
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
+import { SortableList, SortableRow } from './sortable-list'
 import { cn } from '../lib/utils'
 
 /**
@@ -20,8 +21,10 @@ export function PromptPresetBar(): React.JSX.Element {
   const create = usePromptPresetsStore((s) => s.create)
   const update = usePromptPresetsStore((s) => s.update)
   const remove = usePromptPresetsStore((s) => s.remove)
-  const currentPrompt = useGenerationStore((s) => s.request.prompt)
-  const currentNegative = useGenerationStore((s) => s.request.negativePrompt)
+  const reorder = usePromptPresetsStore((s) => s.reorder)
+  const request = useGenerationStore((s) => s.request)
+  const currentPrompt = request.prompt
+  const currentNegative = request.negativePrompt
   const patch = useGenerationStore((s) => s.patchRequest)
   const [open, setOpen] = useState(false)
 
@@ -29,28 +32,36 @@ export function PromptPresetBar(): React.JSX.Element {
     if (!loaded) void load()
   }, [loaded, load])
 
-  // 활성 프리셋에 편집 자동 저장 (디바운스). 프리셋 적용 직후엔 같은 값이라 no-op
+  // 활성 프리셋에 편집 자동 저장 (디바운스) — 프롬프트 + 파라미터(스텝·CFG 등).
+  // 프리셋 적용 직후엔 같은 값이라 no-op
   const syncTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   useEffect(() => {
     if (!loaded || activeId == null) return
     clearTimeout(syncTimer.current)
     syncTimer.current = setTimeout(() => {
       const p = usePromptPresetsStore.getState().presets.find((x) => x.id === activeId)
-      if (p && (p.prompt !== currentPrompt || p.negativePrompt !== currentNegative)) {
-        void update(activeId, { prompt: currentPrompt, negativePrompt: currentNegative })
+      if (!p) return
+      const params = pickPresetParams(useGenerationStore.getState().request)
+      if (
+        p.prompt !== currentPrompt ||
+        p.negativePrompt !== currentNegative ||
+        JSON.stringify(p.params) !== JSON.stringify(params)
+      ) {
+        void update(activeId, { prompt: currentPrompt, negativePrompt: currentNegative, params })
       }
     }, 500)
     return () => clearTimeout(syncTimer.current)
-  }, [currentPrompt, currentNegative, activeId, loaded, update])
+  }, [request, currentPrompt, currentNegative, activeId, loaded, update])
 
   const active = presets.find((p) => p.id === activeId)
 
   const apply = (id: number): void => {
     const p = presets.find((x) => x.id === id)
     if (!p) return
-    patch({ prompt: p.prompt, negativePrompt: p.negativePrompt })
+    setOpen(false) // 먼저 닫기 (B9)
+    // 파라미터도 함께 복원 (구버전 프리셋은 params 없음 — 프롬프트만)
+    patch({ prompt: p.prompt, negativePrompt: p.negativePrompt, ...(p.params ?? {}) })
     setActive(id)
-    setOpen(false)
   }
 
   return (
@@ -64,43 +75,46 @@ export function PromptPresetBar(): React.JSX.Element {
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-[var(--radix-popover-trigger-width)] p-1">
-        <div className="max-h-72 overflow-y-auto">
+        <div className="max-h-72 overflow-y-auto overflow-x-hidden no-scrollbar">
           {presets.length === 0 ? (
             <p className="px-2 py-3 text-center text-[12px] text-faint">저장된 프리셋 없음</p>
           ) : (
-            presets.map((p) => (
-              <div key={p.id} className="group flex items-center gap-1">
-                <button
-                  onClick={() => apply(p.id)}
-                  className={cn(
-                    'flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-surface-2',
-                    p.id === activeId && 'font-semibold text-accent'
-                  )}
-                >
-                  <span className="truncate">{p.name}</span>
-                </button>
-                <button
-                  className="shrink-0 rounded p-1 text-faint opacity-0 hover:text-ink group-hover:opacity-100"
-                  onClick={async () => {
-                    const name = await askText('프리셋 이름', p.name)
-                    if (name) void update(p.id, { name })
-                  }}
-                  title="이름 변경"
-                >
-                  <Pencil size={12} />
-                </button>
-                <button
-                  className="shrink-0 rounded p-1 text-faint opacity-0 hover:text-danger group-hover:opacity-100"
-                  onClick={async () => {
-                    if (await askConfirm(`"${p.name}" 프리셋을 삭제할까요?`, { danger: true }))
-                      void remove(p.id)
-                  }}
-                  title="삭제"
-                >
-                  <Trash2 size={12} />
-                </button>
-              </div>
-            ))
+            // 드래그로 순서 변경
+            <SortableList ids={presets.map((p) => p.id)} onReorder={(ids) => void reorder(ids)}>
+              {presets.map((p) => (
+                <SortableRow key={p.id} id={p.id} className="group gap-1" onTap={() => apply(p.id)}>
+                  <div
+                    onClick={() => apply(p.id)}
+                    className={cn(
+                      'flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px]',
+                      p.id === activeId && 'font-semibold text-accent'
+                    )}
+                  >
+                    <span className="truncate">{p.name}</span>
+                  </div>
+                  <button
+                    className="shrink-0 rounded p-1 text-faint opacity-0 hover:text-ink group-hover:opacity-100"
+                    onClick={async () => {
+                      const name = await askText('프리셋 이름', p.name)
+                      if (name) void update(p.id, { name })
+                    }}
+                    title="이름 변경"
+                  >
+                    <Pencil size={12} />
+                  </button>
+                  <button
+                    className="shrink-0 rounded p-1 text-faint opacity-0 hover:text-danger group-hover:opacity-100"
+                    onClick={async () => {
+                      if (await askConfirm(`"${p.name}" 프리셋을 삭제할까요?`, { danger: true }))
+                        void remove(p.id)
+                    }}
+                    title="삭제"
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </SortableRow>
+              ))}
+            </SortableList>
           )}
         </div>
         <div className="my-1 h-px bg-line" />
@@ -109,7 +123,12 @@ export function PromptPresetBar(): React.JSX.Element {
           onClick={async () => {
             const name = await askText('새 프리셋 이름', '새 프리셋')
             if (!name?.trim()) return
-            const id = await create(name.trim(), '', '')
+            const id = await create(
+              name.trim(),
+              '',
+              '',
+              pickPresetParams(useGenerationStore.getState().request)
+            )
             // 빈 칸으로 시작 — 이후 편집이 이 프리셋에 자동 저장
             patch({ prompt: '', negativePrompt: '' })
             setActive(id)

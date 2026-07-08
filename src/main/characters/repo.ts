@@ -57,14 +57,14 @@ export function listCharacters(): { folders: CharacterFolder[]; items: Character
 
 export function createCharacter(name: string, folderId: number | null): number {
   const db = getDb()
-  const max = db.prepare('SELECT COALESCE(MAX(sort_order), 0) AS m FROM character_prompts').get() as {
+  const max = db
+    .prepare('SELECT COALESCE(MAX(sort_order), 0) AS m FROM character_prompts')
+    .get() as {
     m: number
   }
   return Number(
     db
-      .prepare(
-        'INSERT INTO character_prompts (name, folder_id, sort_order) VALUES (?, ?, ?)'
-      )
+      .prepare('INSERT INTO character_prompts (name, folder_id, sort_order) VALUES (?, ?, ?)')
       .run(name, folderId, max.m + 1).lastInsertRowid
   )
 }
@@ -103,6 +103,25 @@ export function deleteCharacter(id: number): void {
   getDb().prepare('DELETE FROM character_prompts WHERE id = ?').run(id)
 }
 
+/** 카드 복제 — 썸네일 포함, enabled는 꺼서 (실수로 6명 초과 방지) */
+export function duplicateCharacter(id: number): number {
+  const db = getDb()
+  const max = (
+    db.prepare('SELECT COALESCE(MAX(sort_order),0) AS m FROM character_prompts').get() as {
+      m: number
+    }
+  ).m
+  const info = db
+    .prepare(
+      `INSERT INTO character_prompts
+         (name, prompt, negative_prompt, folder, thumbnail, settings_json, enabled, center_x, center_y, folder_id, sort_order)
+       SELECT name || ' 복사', prompt, negative_prompt, folder, thumbnail, settings_json, 0, center_x, center_y, folder_id, ?
+       FROM character_prompts WHERE id = ?`
+    )
+    .run(max + 1, id)
+  return Number(info.lastInsertRowid)
+}
+
 /**
  * 리스트 전체 순서 반영. 카드의 폴더 소속은 "직전에 나온 폴더 행"으로 파생된다
  * (첫 폴더 행보다 위의 카드 = 미분류). 트랜잭션으로 원자 적용.
@@ -128,12 +147,15 @@ export function reorderCharacters(order: CharacterOrderEntry[]): void {
 
 export function createFolder(name: string): number {
   const db = getDb()
-  const max = db.prepare('SELECT COALESCE(MAX(sort_order), 0) AS m FROM character_folders').get() as {
+  const max = db
+    .prepare('SELECT COALESCE(MAX(sort_order), 0) AS m FROM character_folders')
+    .get() as {
     m: number
   }
   return Number(
-    db.prepare('INSERT INTO character_folders (name, sort_order) VALUES (?, ?)').run(name, max.m + 1)
-      .lastInsertRowid
+    db
+      .prepare('INSERT INTO character_folders (name, sort_order) VALUES (?, ?)')
+      .run(name, max.m + 1).lastInsertRowid
   )
 }
 
@@ -175,7 +197,18 @@ export async function pickCharacterThumbnail(id: number): Promise<string | null>
     .toBuffer()
 
   getDb()
-    .prepare(`UPDATE character_prompts SET thumbnail = ?, updated_at = datetime('now') WHERE id = ?`)
+    .prepare(
+      `UPDATE character_prompts SET thumbnail = ?, updated_at = datetime('now') WHERE id = ?`
+    )
     .run(thumbnail, id)
   return thumbnail.toString('base64')
+}
+
+/** 캐릭터 썸네일 제거 (F12) */
+export function clearCharacterThumbnail(id: number): void {
+  getDb()
+    .prepare(
+      `UPDATE character_prompts SET thumbnail = NULL, updated_at = datetime('now') WHERE id = ?`
+    )
+    .run(id)
 }

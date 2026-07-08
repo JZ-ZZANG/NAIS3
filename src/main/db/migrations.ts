@@ -255,64 +255,93 @@ export const migrations: ((db: Database.Database) => void)[] = [
       );
     `)
   },
-  // v10: scene generation character/reference sequence and per-scene additions.
+
+  // v10: 프롬프트 프리셋에 생성 파라미터도 저장 — NAIS2처럼 프리셋 전환 시 스텝·CFG 등 복원
+  (db) => {
+    db.exec(`ALTER TABLE prompt_presets ADD COLUMN params_json TEXT;`)
+  },
+
+  // v11: 씬 프리셋별 기본 해상도 — 새 씬 생성 시 적용 (null = 832×1216)
   (db) => {
     db.exec(`
-      CREATE TABLE scene_generation_options (
+      ALTER TABLE scene_presets ADD COLUMN default_width INTEGER;
+      ALTER TABLE scene_presets ADD COLUMN default_height INTEGER;
+    `)
+  },
+
+  // v12: scene generation character/reference sequence and per-scene additions.
+  (db) => {
+    const hasColumn = (table: string, column: string): boolean =>
+      (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some(
+        (c) => c.name === column
+      )
+
+    if (!hasColumn('prompt_presets', 'params_json')) {
+      db.exec(`ALTER TABLE prompt_presets ADD COLUMN params_json TEXT;`)
+    }
+    if (!hasColumn('scene_presets', 'default_width')) {
+      db.exec(`ALTER TABLE scene_presets ADD COLUMN default_width INTEGER;`)
+    }
+    if (!hasColumn('scene_presets', 'default_height')) {
+      db.exec(`ALTER TABLE scene_presets ADD COLUMN default_height INTEGER;`)
+    }
+
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS scene_generation_options (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
       );
-      INSERT INTO scene_generation_options (key, value) VALUES
+      INSERT OR IGNORE INTO scene_generation_options (key, value) VALUES
         ('sequenceEnabled', '0'),
         ('additionsEnabled', '0');
 
-      CREATE TABLE scene_sequence_entries (
+      CREATE TABLE IF NOT EXISTS scene_sequence_entries (
         id INTEGER PRIMARY KEY,
         name TEXT NOT NULL,
         enabled INTEGER NOT NULL DEFAULT 1,
         sort_order INTEGER NOT NULL DEFAULT 0
       );
 
-      CREATE TABLE scene_sequence_entry_prompts (
+      CREATE TABLE IF NOT EXISTS scene_sequence_entry_prompts (
         entry_id INTEGER NOT NULL REFERENCES scene_sequence_entries(id) ON DELETE CASCADE,
         character_prompt_id INTEGER NOT NULL REFERENCES character_prompts(id) ON DELETE CASCADE,
         sort_order INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (entry_id, character_prompt_id)
       );
 
-      CREATE TABLE scene_sequence_entry_charrefs (
+      CREATE TABLE IF NOT EXISTS scene_sequence_entry_charrefs (
         entry_id INTEGER NOT NULL REFERENCES scene_sequence_entries(id) ON DELETE CASCADE,
         charref_id INTEGER NOT NULL REFERENCES charref_images(id) ON DELETE CASCADE,
         sort_order INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (entry_id, charref_id)
       );
 
-      CREATE TABLE scene_sequence_entry_vibes (
+      CREATE TABLE IF NOT EXISTS scene_sequence_entry_vibes (
         entry_id INTEGER NOT NULL REFERENCES scene_sequence_entries(id) ON DELETE CASCADE,
         vibe_id INTEGER NOT NULL REFERENCES vibe_images(id) ON DELETE CASCADE,
         sort_order INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (entry_id, vibe_id)
       );
 
-      CREATE TABLE scene_character_additions (
+      CREATE TABLE IF NOT EXISTS scene_character_additions (
         scene_id INTEGER PRIMARY KEY REFERENCES gen_scenes(id) ON DELETE CASCADE
       );
 
-      CREATE TABLE scene_character_addition_prompts (
+      CREATE TABLE IF NOT EXISTS scene_character_addition_prompts (
         scene_id INTEGER NOT NULL REFERENCES scene_character_additions(scene_id) ON DELETE CASCADE,
         character_prompt_id INTEGER NOT NULL REFERENCES character_prompts(id) ON DELETE CASCADE,
         sort_order INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (scene_id, character_prompt_id)
       );
 
-      CREATE TABLE scene_character_addition_charrefs (
+      CREATE TABLE IF NOT EXISTS scene_character_addition_charrefs (
         scene_id INTEGER NOT NULL REFERENCES scene_character_additions(scene_id) ON DELETE CASCADE,
         charref_id INTEGER NOT NULL REFERENCES charref_images(id) ON DELETE CASCADE,
         sort_order INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (scene_id, charref_id)
       );
 
-      CREATE TABLE scene_character_addition_vibes (
+      CREATE TABLE IF NOT EXISTS scene_character_addition_vibes (
         scene_id INTEGER NOT NULL REFERENCES scene_character_additions(scene_id) ON DELETE CASCADE,
         vibe_id INTEGER NOT NULL REFERENCES vibe_images(id) ON DELETE CASCADE,
         sort_order INTEGER NOT NULL DEFAULT 0,

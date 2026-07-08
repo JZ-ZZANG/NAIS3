@@ -54,6 +54,8 @@ export interface CharRefItem {
 
 export interface GenerationRequest {
   prompt: string
+  /** Optional NAIS2-style split prompt parts. prompt is still the merged send text. */
+  promptParts?: PromptParts
   negativePrompt: string
   model: string
   width: number
@@ -80,6 +82,12 @@ export interface GenerationRequest {
   charRefIds?: number[]
   /** Request-scoped vibe ids. Omitted means use globally enabled vibes. */
   vibeIds?: number[]
+}
+
+export interface PromptParts {
+  base: string
+  additional: string
+  detail: string
 }
 
 export type QueueItemState = 'pending' | 'generating' | 'done' | 'failed' | 'cancelled'
@@ -201,6 +209,7 @@ export const EMOTIONS = [
 /** NAI PNG에서 읽은 이미지 메타데이터 (정규화) */
 export interface ImageMetadata {
   prompt: string
+  promptParts?: PromptParts & { negative?: string; inpainting?: string }
   negativePrompt: string
   seed?: number
   steps?: number
@@ -225,14 +234,37 @@ export interface ImageMetadata {
 export interface ScenePreset {
   id: number
   name: string
+  /** 새 씬 기본 해상도 (null = 832×1216) */
+  defaultWidth: number | null
+  defaultHeight: number | null
 }
 
-/** 프롬프트 프리셋 (기본 프롬프트+네거티브 저장) */
+/** 프리셋에 함께 저장되는 생성 파라미터 (시드·캐릭터는 제외) */
+export type PresetParams = Partial<
+  Pick<
+    GenerationRequest,
+    | 'model'
+    | 'width'
+    | 'height'
+    | 'steps'
+    | 'cfgScale'
+    | 'cfgRescale'
+    | 'sampler'
+    | 'noiseSchedule'
+    | 'variety'
+    | 'qualityToggle'
+    | 'ucPreset'
+  >
+>
+
+/** 프롬프트 프리셋 (기본 프롬프트+네거티브+파라미터 저장) */
 export interface PromptPreset {
   id: number
   name: string
   prompt: string
   negativePrompt: string
+  /** 스텝·CFG 등 — 프리셋 전환 시 함께 복원 (구버전 프리셋은 null) */
+  params: PresetParams | null
 }
 
 /** 씬 (미리 저장한 프롬프트+해상도. 예약 수만큼 생성) */
@@ -324,8 +356,10 @@ export interface IpcInvokeMap {
   'chars:create': { req: { name: string; folderId: number | null }; res: { id: number } }
   'chars:update': { req: { id: number; patch: CharacterCardPatch }; res: void }
   'chars:delete': { req: { id: number }; res: void }
+  'chars:duplicate': { req: { id: number }; res: { id: number } }
   /** 네이티브 파일 선택 → sharp 리사이즈 → BLOB 저장. 취소 시 thumbnail null */
   'chars:pickThumbnail': { req: { id: number }; res: { thumbnail: string | null } }
+  'chars:clearThumbnail': { req: { id: number }; res: void }
   'chars:reorder': { req: { order: CharacterOrderEntry[] }; res: void }
   'chars:folderCreate': { req: { name: string }; res: { id: number } }
   'chars:folderRename': { req: { id: number; name: string }; res: void }
@@ -340,10 +374,13 @@ export interface IpcInvokeMap {
     res: void
   }
   'frags:delete': { req: { id: number }; res: void }
+  'frags:duplicate': { req: { id: number }; res: { id: number | null } }
   'frags:importTxt': { req: void; res: { count: number } }
   'frags:exportTxt': { req: { id: number }; res: { saved: boolean } }
   /** 조각 전체를 ZIP으로 내보내기 (공유/백업) */
   'frags:exportAll': { req: void; res: { count: number } }
+  /** 순차 선택(<*이름>) 카운터 전체 리셋 — 다시 처음 줄부터 (NAIS2 기능) */
+  'frags:resetSequential': { req: void; res: void }
   'frags:reorder': { req: { order: CharacterOrderEntry[] }; res: void }
   'frags:folderCreate': { req: { name: string }; res: { id: number } }
   'frags:folderRename': { req: { id: number; name: string }; res: void }
@@ -368,9 +405,13 @@ export interface IpcInvokeMap {
   /** 이미지를 클립보드로 복사 */
   'images:copy': { req: { filePath: string }; res: { copied: boolean } }
   /** 저장 폴더: 현재 경로 조회 / 폴더 선택 / 기본값으로 초기화 */
-  'settings:getSaveDir': { req: void; res: { dir: string; isDefault: boolean } }
-  'settings:pickSaveDir': { req: void; res: { dir: string | null } }
-  'settings:resetSaveDir': { req: void; res: { dir: string } }
+  /** target 생략 = main(메인 모드). 'scene' = 씬 모드 저장 폴더 */
+  'settings:getSaveDir': {
+    req: { target?: 'main' | 'scene' } | void
+    res: { dir: string; isDefault: boolean }
+  }
+  'settings:pickSaveDir': { req: { target?: 'main' | 'scene' } | void; res: { dir: string | null } }
+  'settings:resetSaveDir': { req: { target?: 'main' | 'scene' } | void; res: { dir: string } }
   /** 생성 지연 시간(ms) 설정 — 큐에 즉시 반영 + 영속 */
   'gen:setDelay': { req: { ms: number }; res: void }
   /** 디렉터 툴 실행 — 결과를 히스토리에 저장하고 파일 경로 + 결과 base64 반환 */
@@ -392,13 +433,23 @@ export interface IpcInvokeMap {
   'scenePresets:create': { req: { name: string }; res: { id: number } }
   'scenePresets:rename': { req: { id: number; name: string }; res: void }
   'scenePresets:delete': { req: { id: number }; res: void }
+  'scenePresets:reorder': { req: { ids: number[] }; res: void }
+  /** 프리셋의 새 씬 기본 해상도 (N3) */
+  'scenePresets:setDefaultResolution': {
+    req: { id: number; width: number; height: number }
+    res: void
+  }
+  'promptPresets:reorder': { req: { ids: number[] }; res: void }
   'promptPresets:list': { req: void; res: { items: PromptPreset[] } }
   'promptPresets:create': {
-    req: { name: string; prompt: string; negativePrompt: string }
+    req: { name: string; prompt: string; negativePrompt: string; params?: PresetParams }
     res: { id: number }
   }
   'promptPresets:update': {
-    req: { id: number; patch: Partial<Pick<PromptPreset, 'name' | 'prompt' | 'negativePrompt'>> }
+    req: {
+      id: number
+      patch: Partial<Pick<PromptPreset, 'name' | 'prompt' | 'negativePrompt' | 'params'>>
+    }
     res: void
   }
   'promptPresets:delete': { req: { id: number }; res: void }
@@ -440,13 +491,18 @@ export interface IpcInvokeMap {
   'scenes:bulkExportZip': { req: { ids: number[] }; res: { count: number } }
   /** 씬 상세 이미지 페이지네이션 (수만 장 대비) */
   'scenes:images': {
-    req: { sceneId: number; limit: number; offset: number }
+    req: { sceneId: number; limit: number; offset: number; favoritesOnly?: boolean }
     res: { items: SceneImage[]; total: number }
   }
+  /** 씬의 즐겨찾기 제외 전체 삭제 (파일 포함) */
+  'scenes:deleteNonFavorites': { req: { sceneId: number }; res: { deleted: number } }
   'images:setFavorite': { req: { id: number; favorite: boolean }; res: void }
-  'images:delete': { req: { id: number }; res: void }
+  /** 이미지 삭제 — deleteFile=true면 파일까지(씬 상세), 아니면 기록만(히스토리, 파일 보존) */
+  'images:delete': { req: { id: number; deleteFile?: boolean }; res: void }
   /** 히스토리 전체 비우기 (레코드+파일, 씬 이미지 포함) */
   'images:clearAll': { req: void; res: { count: number } }
+  /** 씬 이미지 폴더 열기 (NAIS3_scene/<프리셋>/<씬>) */
+  'scenes:openFolder': { req: { sceneId: number }; res: { ok: boolean } }
   /** 씬 JSON 내보내기/불러오기 (파일 다이얼로그, 활성 프리셋 기준) */
   'scenes:exportJson': { req: { presetId: number }; res: { saved: boolean } }
   'scenes:importJson': { req: { presetId: number }; res: { count: number } }

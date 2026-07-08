@@ -20,6 +20,7 @@ import { useState, type CSSProperties } from 'react'
 import { FOLDER_COLORS, type ListFolder } from '@shared/types'
 import { cn } from '../lib/utils'
 import { DIVIDER_KEY, rowKey, type DisplayRow, type FolderListItem } from '../lib/folder-list'
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from './ui/context-menu'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
@@ -98,6 +99,8 @@ function FolderRow({
     : undefined
 
   return (
+    <ContextMenu>
+    <ContextMenuTrigger asChild>
     <div
       ref={sortable.setNodeRef}
       style={{ ...dndStyle(sortable, false), ...tintStyle }}
@@ -128,10 +131,10 @@ function FolderRow({
           }}
         />
       ) : (
+        // 이름 클릭 = 접기/펼치기 (이름 변경은 연필 버튼/우클릭으로만)
         <button
           className="min-w-0 flex-1 truncate text-left text-[13px] font-medium text-ink"
-          onClick={() => setEditing(true)}
-          title="눌러서 이름 수정"
+          onClick={() => actions.toggleCollapse(folder.id)}
         >
           {folder.name}
           <span className="ml-1.5 font-mono text-[10.5px] font-normal text-faint">{count}</span>
@@ -197,6 +200,25 @@ function FolderRow({
         </Button>
       </div>
     </div>
+    </ContextMenuTrigger>
+    <ContextMenuContent>
+      <ContextMenuItem onSelect={() => actions.addItem(folder.id)}>
+        <Plus size={13} /> 이 폴더에 추가
+      </ContextMenuItem>
+      <ContextMenuItem
+        onSelect={() => {
+          // 우클릭 메뉴가 닫힌 뒤 인라인 편집 시작
+          setTimeout(() => setEditing(true), 0)
+        }}
+      >
+        <Pencil size={13} /> 이름 변경
+      </ContextMenuItem>
+      <ContextMenuSeparator />
+      <ContextMenuItem danger onSelect={() => actions.remove(folder.id)}>
+        <Trash2 size={13} /> 폴더 삭제 (항목은 미분류로)
+      </ContextMenuItem>
+    </ContextMenuContent>
+    </ContextMenu>
   )
 }
 
@@ -260,6 +282,8 @@ export function FolderListView<T extends FolderListItem>({
   onMove,
   renderHeader,
   renderExpanded,
+  itemContextMenu,
+  itemClassName,
   renderTile,
   columns,
   emptyText
@@ -271,6 +295,10 @@ export function FolderListView<T extends FolderListItem>({
   onMove: (activeKey: string, overKey: string) => void
   renderHeader?: (item: T) => React.ReactNode
   renderExpanded?: (item: T) => React.ReactNode
+  /** 카드 우클릭 메뉴 내용 (ContextMenuItem들) — 지정 시 카드 전체가 트리거 */
+  itemContextMenu?: (item: T) => React.ReactNode
+  /** 카드 컨테이너에 얹을 클래스 (활성/호버 강조 등) */
+  itemClassName?: (item: T) => string
   /** 그리드 모드 — 지정 시 columns 그리드로 타일 렌더 (이미지 중심 레퍼런스용) */
   renderTile?: (item: T) => React.ReactNode
   columns?: number
@@ -355,23 +383,39 @@ export function FolderListView<T extends FolderListItem>({
                 disabled={searching || expandedId === row.item.id}
                 indent={!searching && row.item.folderId != null}
               >
-                {/* 카드 = paper(다크=블랙/라이트=화이트), 내부 박스는 surface-2(회색)로 한 단계 대비 */}
-                <div className="rounded-lg border border-line bg-paper">
-                  {renderHeader?.(row.item)}
-                  <AnimatePresence initial={false}>
-                    {expandedId === row.item.id && (
-                      <motion.div
-                        initial={{ height: 0, opacity: 0 }}
-                        animate={{ height: 'auto', opacity: 1 }}
-                        exit={{ height: 0, opacity: 0 }}
-                        transition={{ duration: 0.18, ease: EASE }}
-                        className="overflow-hidden"
-                      >
-                        {renderExpanded?.(row.item)}
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </div>
+                {(() => {
+                  {/* 카드 = paper, 내부 박스는 surface-2로 한 단계 대비 */}
+                  const card = (
+                    <div
+                      className={cn(
+                        'rounded-lg border border-line bg-paper',
+                        itemClassName?.(row.item)
+                      )}
+                    >
+                      {renderHeader?.(row.item)}
+                      <AnimatePresence initial={false}>
+                        {expandedId === row.item.id && (
+                          <motion.div
+                            initial={{ height: 0, opacity: 0 }}
+                            animate={{ height: 'auto', opacity: 1 }}
+                            exit={{ height: 0, opacity: 0 }}
+                            transition={{ duration: 0.18, ease: EASE }}
+                            className="overflow-hidden"
+                          >
+                            {renderExpanded?.(row.item)}
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
+                  )
+                  if (!itemContextMenu) return card
+                  return (
+                    <ContextMenu>
+                      <ContextMenuTrigger asChild>{card}</ContextMenuTrigger>
+                      <ContextMenuContent>{itemContextMenu(row.item)}</ContextMenuContent>
+                    </ContextMenu>
+                  )
+                })()}
               </ItemRow>
             )
           )}

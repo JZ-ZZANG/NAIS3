@@ -1,6 +1,23 @@
 import { create } from 'zustand'
-import type { PromptPreset } from '@shared/types'
+import type { GenerationRequest, PresetParams, PromptPreset } from '@shared/types'
 import { useGenerationStore } from './generation-store'
+
+/** 프리셋에 함께 저장/복원되는 파라미터 (시드·캐릭터 제외) */
+export function pickPresetParams(req: GenerationRequest): PresetParams {
+  return {
+    model: req.model,
+    width: req.width,
+    height: req.height,
+    steps: req.steps,
+    cfgScale: req.cfgScale,
+    cfgRescale: req.cfgRescale,
+    sampler: req.sampler,
+    noiseSchedule: req.noiseSchedule,
+    variety: req.variety,
+    qualityToggle: req.qualityToggle,
+    ucPreset: req.ucPreset
+  }
+}
 
 interface PromptPresetsState {
   presets: PromptPreset[]
@@ -9,11 +26,18 @@ interface PromptPresetsState {
   activeId: number | null
   setActive: (id: number | null) => void
   load: () => Promise<void>
-  create: (name: string, prompt: string, negativePrompt: string) => Promise<number>
+  create: (
+    name: string,
+    prompt: string,
+    negativePrompt: string,
+    params?: PresetParams
+  ) => Promise<number>
   update: (
     id: number,
-    patch: Partial<Pick<PromptPreset, 'name' | 'prompt' | 'negativePrompt'>>
+    patch: Partial<Pick<PromptPreset, 'name' | 'prompt' | 'negativePrompt' | 'params'>>
   ) => Promise<void>
+  /** 드래그 정렬 — 새 id 순서 반영 */
+  reorder: (ids: number[]) => Promise<void>
   remove: (id: number) => Promise<void>
 }
 
@@ -33,11 +57,12 @@ export const usePromptPresetsStore = create<PromptPresetsState>((set, get) => ({
     const { activeId } = get()
     if (activeId != null && !items.some((p) => p.id === activeId)) get().setActive(null)
   },
-  create: async (name, prompt, negativePrompt) => {
+  create: async (name, prompt, negativePrompt, params) => {
     const { id } = await window.nais.invoke('promptPresets:create', {
       name,
       prompt,
-      negativePrompt
+      negativePrompt,
+      params
     })
     await get().load()
     return id
@@ -45,6 +70,11 @@ export const usePromptPresetsStore = create<PromptPresetsState>((set, get) => ({
   update: async (id, patch) => {
     set({ presets: get().presets.map((p) => (p.id === id ? { ...p, ...patch } : p)) })
     await window.nais.invoke('promptPresets:update', { id, patch })
+  },
+  reorder: async (ids) => {
+    const byId = new Map(get().presets.map((p) => [p.id, p]))
+    set({ presets: ids.map((id) => byId.get(id)!).filter(Boolean) })
+    await window.nais.invoke('promptPresets:reorder', { ids })
   },
   remove: async (id) => {
     const { presets, activeId } = get()

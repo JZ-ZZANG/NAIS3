@@ -1,16 +1,23 @@
-import { Download, FileDown, FileUp, FolderPlus, Plus, Puzzle, Search, Trash2, X } from 'lucide-react'
+import { Copy, Download, FileDown, FileUp, FolderPlus, Pencil, Plus, Puzzle, RotateCcw, Search, Trash2, X } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import type { Fragment } from '@shared/types'
 import { cn } from '../lib/utils'
 import { buildDisplayRows } from '../lib/folder-list'
 import { useFragmentsStore } from '../stores/fragments-store'
 import { toast } from '../stores/toast-store'
+import { askText } from '../stores/dialog-store'
 import { FolderListView } from './folder-list-view'
 import { Button } from './ui/button'
-import { Input, Textarea } from './ui/input'
+import { ContextMenuItem, ContextMenuSeparator } from './ui/context-menu'
+import { Input } from './ui/input'
+import { PromptEditor } from './prompt-editor'
 
 function lineCount(content: string): number {
-  return content.split('\n').filter((l) => l.trim() && !l.trim().startsWith('#')).length
+  // #부터 줄 끝까지 주석 (main의 contentToLines와 동일 규칙)
+  return content.split('\n').filter((l) => {
+    const i = l.indexOf('#')
+    return (i === -1 ? l : l.slice(0, i)).trim().length > 0
+  }).length
 }
 
 export function FragmentOverlay(): React.JSX.Element {
@@ -29,6 +36,8 @@ export function FragmentOverlay(): React.JSX.Element {
   const importTxt = useFragmentsStore((s) => s.importTxt)
   const exportTxt = useFragmentsStore((s) => s.exportTxt)
   const exportAll = useFragmentsStore((s) => s.exportAll)
+  const duplicate = useFragmentsStore((s) => s.duplicate)
+  const resetSequential = useFragmentsStore((s) => s.resetSequential)
 
   const [search, setSearch] = useState('')
   const [expandedId, setExpandedId] = useState<number | null>(null)
@@ -70,14 +79,22 @@ export function FragmentOverlay(): React.JSX.Element {
   }
 
   const renderExpanded = (fragment: Fragment): React.ReactNode => (
+    // 이름은 헤더에만 표시하고 여기선 편집만(중복 제거, F8). 이름 변경은 헤더 연필/우클릭과
+    // 동일한 dialog 방식 — 매 키 입력마다 저장하던 인라인 Input을 없애 한글 조합 깨짐도 회피.
     <div className="flex flex-col gap-1.5 px-2.5 pb-2">
-      <div className="flex gap-1.5">
-        <Input
-          className="h-8 flex-1 bg-surface-2 text-[12.5px]"
-          value={fragment.name}
-          placeholder="이름"
-          onChange={(e) => update(fragment.id, { name: e.target.value })}
-        />
+      <div className="flex items-center justify-end gap-1.5">
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-8 w-8 p-0"
+          title="이름 변경"
+          onClick={async () => {
+            const name = await askText('이름 변경', fragment.name)
+            if (name != null) update(fragment.id, { name })
+          }}
+        >
+          <Pencil size={14} />
+        </Button>
         <Button
           size="sm"
           variant="ghost"
@@ -97,12 +114,13 @@ export function FragmentOverlay(): React.JSX.Element {
           <Trash2 size={14} />
         </Button>
       </div>
-      <Textarea
-        rows={6}
-        className="bg-surface-2 font-mono text-[12px]"
+      {/* 조각 내용도 프롬프트 — 하이라이트/자동완성 공용 컴포넌트 사용, 세로 크기 조절 (F10) */}
+      <PromptEditor
+        className="h-36 max-h-[520px] min-h-20 resize-y bg-surface-2"
         value={fragment.content}
-        placeholder={'한 줄 = 한 옵션 (여러 줄이면 생성마다 랜덤 선택)\n# 으로 시작하면 주석'}
-        onChange={(e) => update(fragment.id, { content: e.target.value })}
+        tokensOverride={null}
+        placeholder={'한 줄 = 한 옵션 (여러 줄이면 생성마다 랜덤 선택)\n# 부터 줄 끝까지 주석'}
+        onValueChange={(v) => update(fragment.id, { content: v })}
       />
       <p className="text-[10.5px] text-faint">
         {'<'}
@@ -122,6 +140,18 @@ export function FragmentOverlay(): React.JSX.Element {
         </Button>
         <span className="text-[13px] font-medium">조각 프롬프트</span>
         <span className="font-mono text-[10.5px] text-faint">{items.length}</span>
+        <Button
+          size="icon"
+          variant="ghost"
+          className="h-7 w-7"
+          title="순차 선택 카운터 리셋 (<*이름>을 다시 첫 줄부터)"
+          onClick={async () => {
+            await resetSequential()
+            toast('순차 카운터를 리셋했습니다', 'success')
+          }}
+        >
+          <RotateCcw size={14} />
+        </Button>
         <div className="flex-1" />
         <Button
           size="sm"
@@ -179,8 +209,28 @@ export function FragmentOverlay(): React.JSX.Element {
             addItem: (folderId) => void create(folderId).then((id) => setExpandedId(id))
           }}
           onMove={move}
+          itemClassName={() => 'transition-colors hover:border-muted/60'}
           renderHeader={renderHeader}
           renderExpanded={renderExpanded}
+          itemContextMenu={(fragment) => (
+            <>
+              <ContextMenuItem
+                onSelect={async () => {
+                  const name = await askText('이름 변경', fragment.name)
+                  if (name != null) update(fragment.id, { name })
+                }}
+              >
+                <Pencil size={13} /> 이름 변경
+              </ContextMenuItem>
+              <ContextMenuItem onSelect={() => void duplicate(fragment.id)}>
+                <Copy size={13} /> 복제
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+              <ContextMenuItem danger onSelect={() => remove(fragment.id)}>
+                <Trash2 size={13} /> 삭제
+              </ContextMenuItem>
+            </>
+          )}
           emptyText={items.length === 0 ? '조각을 추가하거나 TXT를 가져오세요' : '검색 결과 없음'}
         />
       </div>

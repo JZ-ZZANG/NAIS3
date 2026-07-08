@@ -139,6 +139,8 @@ function AppearanceSection(): React.JSX.Element {
 function GenerationSection(): React.JSX.Element {
   const [streaming, setStreaming] = useState(true)
   const [delay, setDelay] = useState(600)
+  const promptSplitEnabled = useGenerationStore((s) => s.promptSplitEnabled)
+  const setPromptSplitEnabled = useGenerationStore((s) => s.setPromptSplitEnabled)
 
   useEffect(() => {
     void window.nais.invoke('settings:get', { key: 'gen_streaming' }).then(({ value }) => {
@@ -151,10 +153,7 @@ function GenerationSection(): React.JSX.Element {
 
   return (
     <div className="divide-y divide-line">
-      <Row
-        label="스트리밍 생성"
-        hint="생성 과정을 실시간 미리보기"
-      >
+      <Row label="스트리밍 생성" hint="생성 과정을 실시간 미리보기">
         <Switch
           checked={streaming}
           onCheckedChange={(v) => {
@@ -162,6 +161,9 @@ function GenerationSection(): React.JSX.Element {
             void window.nais.invoke('settings:set', { key: 'gen_streaming', value: v ? '1' : '0' })
           }}
         />
+      </Row>
+      <Row label="프롬프트 3분할" hint="고정 / 가변 / 디테일 칸으로 나누기">
+        <Switch checked={promptSplitEnabled} onCheckedChange={setPromptSplitEnabled} />
       </Row>
       <Row label={`생성 지연 — ${(delay / 1000).toFixed(1)}초`} hint="연속 생성 간격">
         <Slider
@@ -178,24 +180,80 @@ function GenerationSection(): React.JSX.Element {
   )
 }
 
-function StorageSection(): React.JSX.Element {
+/** 저장 폴더 한 줄 (메인/씬 공용) — 경로 표시 + 변경 + 기본값 복귀 */
+function SaveDirRow({
+  target,
+  label,
+  hint
+}: {
+  target: 'main' | 'scene'
+  label: string
+  hint: string
+}): React.JSX.Element {
   const [dir, setDir] = useState('')
   const [isDefault, setIsDefault] = useState(true)
-  const [autoSave, setAutoSave] = useState(true)
-  const [format, setFormat] = useState('png')
-  const [dateFolders, setDateFolders] = useState(true)
-
   const refresh = (): void => {
-    void window.nais.invoke('settings:getSaveDir', undefined).then((r) => {
+    void window.nais.invoke('settings:getSaveDir', { target }).then((r) => {
       setDir(r.dir)
       setIsDefault(r.isDefault)
     })
   }
+  useEffect(refresh, [target])
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div>
+        <p className="text-[13px] text-ink">{label}</p>
+        <p className="text-[11.5px] text-faint">{hint}</p>
+      </div>
+      <div className="flex w-full min-w-0 items-center gap-1.5 overflow-hidden">
+        <div
+          className="w-0 min-w-0 flex-1 truncate rounded-md border border-line bg-surface-2/60 px-3 py-2 font-mono text-[12px] text-muted"
+          title={dir}
+        >
+          {dir}
+        </div>
+        <Button
+          variant="default"
+          className="gap-1"
+          onClick={async () => {
+            const r = await window.nais.invoke('settings:pickSaveDir', { target })
+            if (r.dir) refresh()
+          }}
+        >
+          <FolderOpen size={14} /> 변경
+        </Button>
+        {!isDefault && (
+          <Button
+            variant="ghost"
+            title="기본 폴더로"
+            onClick={async () => {
+              await window.nais.invoke('settings:resetSaveDir', { target })
+              refresh()
+            }}
+          >
+            <RotateCcw size={14} />
+          </Button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function StorageSection(): React.JSX.Element {
+  const [autoSave, setAutoSave] = useState(true)
+  const [format, setFormat] = useState('png')
+  const [dateFolders, setDateFolders] = useState(true)
+
   useEffect(() => {
-    refresh()
-    void window.nais.invoke('settings:get', { key: 'auto_save' }).then(({ value }) => setAutoSave(value !== '0'))
-    void window.nais.invoke('settings:get', { key: 'image_format' }).then(({ value }) => setFormat(value || 'png'))
-    void window.nais.invoke('settings:get', { key: 'date_folders' }).then(({ value }) => setDateFolders(value !== '0'))
+    void window.nais
+      .invoke('settings:get', { key: 'auto_save' })
+      .then(({ value }) => setAutoSave(value !== '0'))
+    void window.nais
+      .invoke('settings:get', { key: 'image_format' })
+      .then(({ value }) => setFormat(value || 'png'))
+    void window.nais
+      .invoke('settings:get', { key: 'date_folders' })
+      .then(({ value }) => setDateFolders(value !== '0'))
   }, [])
 
   return (
@@ -210,7 +268,7 @@ function StorageSection(): React.JSX.Element {
             }}
           />
         </Row>
-        <Row label="날짜별 폴더" hint="NAIS3_output 안을 YYYY-MM으로 정리">
+        <Row label="날짜별 폴더" hint="메인 저장 폴더 안을 YYYY-MM으로 정리">
           <Switch
             checked={dateFolders}
             onCheckedChange={(v) => {
@@ -237,39 +295,16 @@ function StorageSection(): React.JSX.Element {
           </Select>
         </Row>
       </div>
-      <div>
-        <p className="text-[13px] text-ink">이미지 저장 폴더</p>
-      </div>
-      <div className="flex w-full min-w-0 items-center gap-1.5 overflow-hidden">
-        <div
-          className="w-0 min-w-0 flex-1 truncate rounded-md border border-line bg-surface-2/60 px-3 py-2 font-mono text-[12px] text-muted"
-          title={dir}
-        >
-          {dir}
-        </div>
-        <Button
-          variant="default"
-          className="gap-1"
-          onClick={async () => {
-            const r = await window.nais.invoke('settings:pickSaveDir', undefined)
-            if (r.dir) refresh()
-          }}
-        >
-          <FolderOpen size={14} /> 변경
-        </Button>
-        {!isDefault && (
-          <Button
-            variant="ghost"
-            title="기본 폴더로"
-            onClick={async () => {
-              await window.nais.invoke('settings:resetSaveDir', undefined)
-              refresh()
-            }}
-          >
-            <RotateCcw size={14} />
-          </Button>
-        )}
-      </div>
+      <SaveDirRow
+        target="main"
+        label="메인 저장 폴더"
+        hint="일반 생성 이미지가 이 폴더에 바로 쌓임"
+      />
+      <SaveDirRow
+        target="scene"
+        label="씬 저장 폴더"
+        hint="이 폴더 아래 프리셋/씬 이름으로 정리됨"
+      />
 
       <div className="mt-1 border-t border-line pt-3">
         <p className="text-[13px] text-ink">데이터 백업</p>
@@ -484,7 +519,11 @@ function AccountSection(): React.JSX.Element {
             </Button>
           </>
         ) : (
-          <Button variant="accent" disabled={status === 'checking'} onClick={() => void saveToken()}>
+          <Button
+            variant="accent"
+            disabled={status === 'checking'}
+            onClick={() => void saveToken()}
+          >
             {status === 'checking' ? '확인 중…' : '저장'}
           </Button>
         )}
@@ -507,11 +546,15 @@ function AccountSection(): React.JSX.Element {
             <p className="text-[10.5px] text-faint">현재 잔액</p>
           </div>
           <div>
-            <p className="font-mono text-[15px] text-ink">{usage ? usage.today.toLocaleString() : '—'}</p>
+            <p className="font-mono text-[15px] text-ink">
+              {usage ? usage.today.toLocaleString() : '—'}
+            </p>
             <p className="text-[10.5px] text-faint">오늘 사용</p>
           </div>
           <div>
-            <p className="font-mono text-[15px] text-ink">{usage ? usage.week.toLocaleString() : '—'}</p>
+            <p className="font-mono text-[15px] text-ink">
+              {usage ? usage.week.toLocaleString() : '—'}
+            </p>
             <p className="text-[10.5px] text-faint">최근 7일</p>
           </div>
         </div>

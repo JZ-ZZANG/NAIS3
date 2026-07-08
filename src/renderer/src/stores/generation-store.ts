@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { GenerationRequest, HistoryItem, QueueStatus } from '@shared/types'
+import type { GenerationRequest, HistoryItem, PromptParts, QueueStatus } from '@shared/types'
 import { enabledCharacters } from './characters-store'
 import { useVibesStore } from './refs-store'
 import { toast } from './toast-store'
@@ -29,10 +29,21 @@ export const DEFAULT_REQUEST: GenerationRequest = {
   useCoords: false
 }
 
+export function mergePromptParts(parts: PromptParts): string {
+  return [parts.base, parts.additional, parts.detail].filter((p) => p.trim()).join(', ')
+}
+
+function withoutTransientSource(request: GenerationRequest): GenerationRequest {
+  const rest = { ...request }
+  delete rest.source
+  return rest
+}
+
 interface GenerationState {
   request: GenerationRequest
   seedLocked: boolean
   batchCount: number
+  promptSplitEnabled: boolean
   /** paper | tablet | scroll | opus — Anlas 추정용 */
   subscriptionTier: string | null
   setSubscriptionTier: (tier: string) => void
@@ -48,12 +59,16 @@ interface GenerationState {
   avgDurationMs: number | null
   /** 중앙에 표시할 이미지 (완성작 파일 경로) */
   viewingFilePath: string | null
+  /** 생성 중 유저가 클릭해 고정한 보기 — 스트리밍보다 우선 표시 */
+  viewPinned: boolean
   history: HistoryItem[]
   historyTotal: number
 
   patchRequest: (patch: Partial<GenerationRequest>) => void
   setSeedLocked: (locked: boolean) => void
   setBatchCount: (count: number) => void
+  setPromptSplitEnabled: (enabled: boolean) => void
+  patchPromptParts: (patch: Partial<PromptParts>) => void
   hydrate: () => Promise<void>
   generate: () => Promise<void>
   cancelAll: () => Promise<void>
@@ -77,6 +92,7 @@ export const useGenerationStore = create<GenerationState>((set, get) => ({
   request: DEFAULT_REQUEST,
   seedLocked: localStorage.getItem('seed_locked') === '1',
   batchCount: Number(localStorage.getItem('batch_count')) || 1,
+  promptSplitEnabled: false,
   subscriptionTier: null,
   setSubscriptionTier: (tier) => {
     set({ subscriptionTier: tier })
@@ -98,16 +114,21 @@ export const useGenerationStore = create<GenerationState>((set, get) => ({
   genStartAt: null,
   avgDurationMs: Number(localStorage.getItem('gen_avg_ms')) || null,
   viewingFilePath: null,
+  viewPinned: false,
   history: [],
   historyTotal: 0,
 
   patchRequest: (patch) => {
-    const request = { ...get().request, ...patch }
+    const request = withoutTransientSource({ ...get().request, ...patch })
     set({ request })
     // 편집도 즉시 영속(디바운스) — 생성 안 하고 재시작해도 롤백되지 않게
     persistParams(request)
   },
   setSeedLocked: (seedLocked) => {
+    // 시드가 -1(랜덤)인 채로 잠그면 아무것도 고정되지 않음 — 잠그는 순간 시드를 확정
+    if (seedLocked && get().request.seed < 0) {
+      get().patchRequest({ seed: randomSeed() })
+    }
     set({ seedLocked })
     localStorage.setItem('seed_locked', seedLocked ? '1' : '0')
   },
@@ -116,14 +137,39 @@ export const useGenerationStore = create<GenerationState>((set, get) => ({
     set({ batchCount: clamped })
     localStorage.setItem('batch_count', String(clamped))
   },
+  setPromptSplitEnabled: (promptSplitEnabled) => {
+    const request = get().request
+    const promptParts =
+      request.promptParts ??
+      ({ base: request.prompt, additional: '', detail: '' } satisfies PromptParts)
+    set({ promptSplitEnabled, request: { ...request, promptParts } })
+    void window.nais.invoke('settings:set', {
+      key: 'prompt_split_enabled',
+      value: promptSplitEnabled ? '1' : '0'
+    })
+    persistParams({ ...request, promptParts })
+  },
+  patchPromptParts: (patch) => {
+    const prev = get().request.promptParts ?? {
+      base: get().request.prompt,
+      additional: '',
+      detail: ''
+    }
+    const promptParts = { ...prev, ...patch }
+    get().patchRequest({ promptParts, prompt: mergePromptParts(promptParts) })
+  },
 
   hydrate: async () => {
     const { value: tier } = await window.nais.invoke('settings:get', { key: 'nai_tier' })
     if (tier) set({ subscriptionTier: tier })
+    const { value: split } = await window.nais.invoke('settings:get', {
+      key: 'prompt_split_enabled'
+    })
+    set({ promptSplitEnabled: split === '1' })
     const { value } = await window.nais.invoke('settings:get', { key: 'main_params' })
     if (value) {
       try {
-        set({ request: { ...DEFAULT_REQUEST, ...JSON.parse(value) } })
+        set({ request: withoutTransientSource({ ...DEFAULT_REQUEST, ...JSON.parse(value) }) })
       } catch {
         // 손상된 저장값은 기본값으로
       }
@@ -137,6 +183,7 @@ export const useGenerationStore = create<GenerationState>((set, get) => ({
   generate: async () => {
     const { request, seedLocked, batchCount } = get()
     const seed = seedLocked && request.seed >= 0 ? request.seed : randomSeed()
+    const baseRequest = withoutTransientSource({ ...request, seed })
     // 캐릭터는 라이브러리의 enabled 카드에서 구성 (리스트 순서 = v4 use_order 순서)
     const characterPrompts = enabledCharacters().map((c) => ({
       prompt: c.prompt,
@@ -146,8 +193,7 @@ export const useGenerationStore = create<GenerationState>((set, get) => ({
     }))
     const src = get().source
     const finalRequest = {
-      ...request,
-      seed,
+      ...baseRequest,
       characterPrompts,
       source: src
         ? {
@@ -161,11 +207,11 @@ export const useGenerationStore = create<GenerationState>((set, get) => ({
       // i2i는 소스 이미지 해상도를 따른다
       ...(src ? { width: src.width, height: src.height } : {})
     }
-    if (!seedLocked) set({ request: finalRequest })
+    if (!seedLocked) set({ request: baseRequest })
 
     void window.nais.invoke('settings:set', {
       key: 'main_params',
-      value: JSON.stringify(finalRequest)
+      value: JSON.stringify(baseRequest)
     })
     set({ previewPng: null, progress: null, viewingFilePath: null })
     await window.nais.invoke('queue:enqueue', {
@@ -177,8 +223,10 @@ export const useGenerationStore = create<GenerationState>((set, get) => ({
   cancelAll: async () => {
     const queue = get().queue
     if (!queue) return
-    const pendingIds = queue.items.filter((i) => i.state === 'pending').map((i) => i.id)
-    await window.nais.invoke('queue:cancel', { ids: pendingIds })
+    const ids = queue.items
+      .filter((i) => i.state === 'pending' || i.state === 'generating')
+      .map((i) => i.id)
+    await window.nais.invoke('queue:cancel', { ids })
   },
 
   refreshHistory: async () => {
@@ -186,9 +234,19 @@ export const useGenerationStore = create<GenerationState>((set, get) => ({
     set({ history: items, historyTotal: total })
   },
 
-  view: (viewingFilePath) => set({ viewingFilePath }),
+  // 생성 중에 유저가 다른 이미지를 클릭하면 "고정 보기" — 스트리밍이 화면을 덮지 않는다 (B11)
+  view: (viewingFilePath) => {
+    const active =
+      get().queue?.items.some((i) => i.state === 'pending' || i.state === 'generating') ?? false
+    set({ viewingFilePath, viewPinned: viewingFilePath != null && active })
+  },
   source: null,
-  setSource: (source) => set({ source }),
+  setSource: (source) =>
+    set({
+      source,
+      inpaintTarget: null,
+      request: withoutTransientSource(get().request)
+    }),
   inpaintTarget: null,
   startInpaintFromPath: async (filePath) => {
     const res = await window.nais.invoke('images:readForSource', { filePath })
@@ -198,7 +256,8 @@ export const useGenerationStore = create<GenerationState>((set, get) => ({
     }
     set({ inpaintTarget: { base64: res.base64, width: res.width, height: res.height } })
   },
-  startInpaintFromImage: (base64, width, height) => set({ inpaintTarget: { base64, width, height } }),
+  startInpaintFromImage: (base64, width, height) =>
+    set({ inpaintTarget: { base64, width, height } }),
   confirmInpaint: (maskBase64) => {
     const t = get().inpaintTarget
     if (!t) return
@@ -235,7 +294,10 @@ let persistTimer: ReturnType<typeof setTimeout> | undefined
 function persistParams(request: GenerationRequest): void {
   clearTimeout(persistTimer)
   persistTimer = setTimeout(() => {
-    void window.nais.invoke('settings:set', { key: 'main_params', value: JSON.stringify(request) })
+    void window.nais.invoke('settings:set', {
+      key: 'main_params',
+      value: JSON.stringify(withoutTransientSource(request))
+    })
   }, 400)
 }
 
@@ -282,16 +344,22 @@ export function bindGenerationEvents(): () => void {
         toast(item.error ?? '생성 실패', 'error')
       }
     }
-    // 방금 완료된 항목이 있으면 히스토리 갱신 + 중앙에 표시
+    // 방금 완료된 항목이 있으면 히스토리 갱신 + 중앙에 표시 (고정 보기 중엔 보기 유지)
     const prevDone = new Set(prev?.items.filter((i) => i.state === 'done').map((i) => i.id))
     const newlyDone = queue.items.find((i) => i.state === 'done' && !prevDone.has(i.id))
     if (newlyDone?.filePath) {
-      useGenerationStore.setState({
-        viewingFilePath: newlyDone.filePath,
-        previewPng: null,
-        progress: null
-      })
+      const pinned = useGenerationStore.getState().viewPinned
+      useGenerationStore.setState(
+        pinned
+          ? { previewPng: null, progress: null }
+          : { viewingFilePath: newlyDone.filePath, previewPng: null, progress: null }
+      )
       void useGenerationStore.getState().refreshHistory()
+    }
+    // 큐가 다 끝나면 고정 해제
+    const stillActive = queue.items.some((i) => i.state === 'pending' || i.state === 'generating')
+    if (!stillActive && useGenerationStore.getState().viewPinned) {
+      useGenerationStore.setState({ viewPinned: false })
     }
   })
   const offProgress = window.nais.on('generation:progress', (e) => {

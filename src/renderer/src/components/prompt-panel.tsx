@@ -2,6 +2,7 @@ import {
   ChevronDown,
   ChevronUp,
   ImageUp,
+  Info,
   Layers,
   Minus,
   Plus,
@@ -11,7 +12,7 @@ import {
   UsersRound
 } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { estimateAnlas } from '@shared/anlas'
 import { useCharactersStore } from '../stores/characters-store'
 import { useFragmentsStore } from '../stores/fragments-store'
@@ -27,10 +28,15 @@ import { ParamsDialog } from './params-dialog'
 import { RefOverlay } from './ref-overlay'
 import { SOURCE_BANNER_HEIGHT, SourceBanner } from './source-banner'
 import { Button } from './ui/button'
+import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
+
+const TOKEN_LIMIT = 512
 
 export function PromptPanel(): React.JSX.Element {
   const request = useGenerationStore((s) => s.request)
   const patch = useGenerationStore((s) => s.patchRequest)
+  const patchPromptParts = useGenerationStore((s) => s.patchPromptParts)
+  const promptSplitEnabled = useGenerationStore((s) => s.promptSplitEnabled)
   const queue = useGenerationStore((s) => s.queue)
   const batchCount = useGenerationStore((s) => s.batchCount)
   const setBatchCount = useGenerationStore((s) => s.setBatchCount)
@@ -50,6 +56,12 @@ export function PromptPanel(): React.JSX.Element {
   const source = useGenerationStore((s) => s.source)
   const [paramsOpen, setParamsOpen] = useState(false)
 
+  useEffect(() => {
+    const openParams = (): void => setParamsOpen((v) => !v)
+    window.addEventListener('shortcut:openParams', openParams)
+    return () => window.removeEventListener('shortcut:openParams', openParams)
+  }, [])
+
   // 씬 모드: 생성은 예약된 씬들을 예약 수만큼 큐에 넣는다. 예약 0이면 생성 버튼 비활성.
   const centerMode = useLayoutStore((s) => s.centerMode)
   const sceneReserved = useScenesStore((s) => totalReserved(s.scenes))
@@ -58,6 +70,34 @@ export function PromptPanel(): React.JSX.Element {
   // 프롬프트/네거티브 개별 접기 — 하나를 접으면 다른 하나가 넓어짐
   const [posCollapsed, setPosCollapsed] = useState(false)
   const [negCollapsed, setNegCollapsed] = useState(false)
+  // 포지티브/네거티브 세로 비율 — 사이 스플리터 드래그로 조절 (F10)
+  const promptAreaRef = useRef<HTMLDivElement>(null)
+  const [posRatio, setPosRatio] = useState(() => {
+    const v = Number(localStorage.getItem('prompt_pos_ratio'))
+    return v >= 0.15 && v <= 0.85 ? v : 0.62
+  })
+  const bothOpen = !posCollapsed && !negCollapsed
+  const startPromptResize = (e: React.MouseEvent): void => {
+    e.preventDefault()
+    const area = promptAreaRef.current
+    if (!area) return
+    const onMove = (ev: MouseEvent): void => {
+      const rect = area.getBoundingClientRect()
+      const r = Math.min(0.85, Math.max(0.15, (ev.clientY - rect.top) / rect.height))
+      setPosRatio(r)
+    }
+    const onUp = (): void => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      localStorage.setItem('prompt_pos_ratio', String(posRatioRef.current))
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+  const posRatioRef = useRef(posRatio)
+  useEffect(() => {
+    posRatioRef.current = posRatio
+  }, [posRatio])
 
   const subscriptionTier = useGenerationStore((s) => s.subscriptionTier)
   const queueCount =
@@ -65,8 +105,8 @@ export function PromptPanel(): React.JSX.Element {
   const generating = queueCount > 0
   const activeChars = charItems.filter((c) => c.enabled && c.prompt.trim()).length
 
-  // 토큰 예산: 포지티브(기본+캐릭터 합산)와 네거티브(UC+캐릭터 네거 합산)가 각각 512 공유
-  // — 공홈 실측으로 확인. 카운트는 입력 원문 기준 (프리셋/퀄리티 태그 미포함)
+  // 토큰 표시: 포지티브는 기본+캐릭터 합산(공홈과 동일), 네거티브는 메인 것만 —
+  // 공홈이 메인 네거와 캐릭터 네거를 별개로 세므로 합산하지 않는다 (캐릭 네거는 카드에서 자체 표시)
   const [tokenTotals, setTokenTotals] = useState<{ pos: number | null; neg: number | null }>({
     pos: null,
     neg: null
@@ -77,9 +117,7 @@ export function PromptPanel(): React.JSX.Element {
   )
   useEffect(() => {
     const posTexts = [request.prompt, ...enabledChars.map((c) => c.prompt)].filter((t) => t.trim())
-    const negTexts = [request.negativePrompt, ...enabledChars.map((c) => c.negativePrompt)].filter(
-      (t) => t.trim()
-    )
+    const negTexts = [request.negativePrompt].filter((t) => t.trim())
     if (posTexts.length === 0 && negTexts.length === 0) {
       const timer = setTimeout(() => setTokenTotals({ pos: null, neg: null }))
       return () => clearTimeout(timer)
@@ -140,7 +178,7 @@ export function PromptPanel(): React.JSX.Element {
       <div className="drag absolute inset-x-0 top-0 h-3" />
       {/* 오버레이는 프롬프트 영역만 덮는다 — 하단 버튼들은 항상 접근 가능 (NAIS2 2.0.7 교훈)
           셸 하나가 열림/닫힘만 애니메이션하고 내용은 즉시 전환 — 오버레이 간 전환 깜빡임 방지 */}
-      <div className="relative flex min-h-0 flex-1 flex-col gap-2">
+      <div ref={promptAreaRef} className="relative flex min-h-0 flex-1 flex-col gap-2">
         <AnimatePresence>
           {(charOverlayOpen || fragOverlayOpen || vibeOverlayOpen || crefOverlayOpen) && (
             <motion.div
@@ -181,30 +219,59 @@ export function PromptPanel(): React.JSX.Element {
         {/* 프롬프트 프리셋 — 포지티브 프롬프트 위 */}
         <PromptPresetBar />
         <div
-          className={
-            'flex min-h-0 flex-col gap-1 ' +
-            (posCollapsed ? 'flex-none' : negCollapsed ? 'flex-1' : 'flex-[3]')
+          className={'flex min-h-0 flex-col gap-1 ' + (posCollapsed ? 'flex-none' : 'min-h-9')}
+          style={
+            bothOpen
+              ? { flexGrow: posRatio, flexBasis: 0 }
+              : !posCollapsed
+                ? { flexGrow: 1 }
+                : undefined
           }
         >
           <CollapseHeader
             label="프롬프트"
             collapsed={posCollapsed}
             onToggle={() => setPosCollapsed((v) => !v)}
+            action={
+              <div className="flex items-center gap-1">
+                {promptSplitEnabled && <TokenBadge tokens={tokenTotals.pos} />}
+                <SyntaxHelp />
+              </div>
+            }
           />
-          {!posCollapsed && (
-            <PromptEditor
-              className="min-h-0 flex-1"
-              value={request.prompt}
-              tokensOverride={tokenTotals.pos}
-              placeholder="1girl, ...  (태그 자동완성 · <조각>)"
-              onValueChange={(v) => patch({ prompt: v })}
-            />
-          )}
+          {!posCollapsed &&
+            (promptSplitEnabled ? (
+              <SplitPromptFields
+                parts={request.promptParts ?? { base: request.prompt, additional: '', detail: '' }}
+                onChange={patchPromptParts}
+              />
+            ) : (
+              <PromptEditor
+                className="min-h-0 flex-1"
+                value={request.prompt}
+                tokensOverride={tokenTotals.pos}
+                placeholder="1girl, ...  (태그 자동완성 · <조각>)"
+                onValueChange={(v) => patch({ prompt: v })}
+              />
+            ))}
         </div>
+        {/* 세로 비율 조절 스플리터 (둘 다 펼쳐졌을 때만) */}
+        {bothOpen && (
+          <div
+            className="group -my-1 flex h-2 shrink-0 cursor-row-resize items-center justify-center"
+            onMouseDown={startPromptResize}
+          >
+            <div className="h-0.5 w-8 rounded-full bg-line transition-colors group-hover:bg-accent/50" />
+          </div>
+        )}
         <div
-          className={
-            'flex min-h-0 flex-col gap-1 ' +
-            (negCollapsed ? 'flex-none' : posCollapsed ? 'flex-1' : 'flex-[1.6]')
+          className={'flex min-h-0 flex-col gap-1 ' + (negCollapsed ? 'flex-none' : 'min-h-9')}
+          style={
+            bothOpen
+              ? { flexGrow: 1 - posRatio, flexBasis: 0 }
+              : !negCollapsed
+                ? { flexGrow: 1 }
+                : undefined
           }
         >
           <CollapseHeader
@@ -277,7 +344,17 @@ export function PromptPanel(): React.JSX.Element {
           >
             <Minus size={13} />
           </Button>
-          <span className="w-8 text-center font-mono text-[13px]">{batchCount}</span>
+          {/* 숫자 직접 입력 가능 */}
+          <input
+            className="w-8 bg-transparent text-center font-mono text-[13px] text-ink outline-none"
+            value={batchCount}
+            inputMode="numeric"
+            onChange={(e) => {
+              const n = parseInt(e.target.value.replace(/[^0-9]/g, ''), 10)
+              if (!Number.isNaN(n)) setBatchCount(n)
+            }}
+            onFocus={(e) => e.target.select()}
+          />
           <Button
             size="icon"
             variant="ghost"
@@ -336,21 +413,258 @@ export function PromptPanel(): React.JSX.Element {
 function CollapseHeader({
   label,
   collapsed,
-  onToggle
+  onToggle,
+  action
 }: {
   label: string
   collapsed: boolean
   onToggle: () => void
+  action?: React.ReactNode
 }): React.JSX.Element {
   return (
-    <button
-      onClick={onToggle}
-      className="flex shrink-0 items-center justify-between text-[12px] font-medium text-muted transition-colors hover:text-ink"
-      title={collapsed ? `${label} 펼치기` : `${label} 접기`}
+    <div className="flex shrink-0 items-center justify-between text-[12px] font-medium text-muted">
+      <button
+        onClick={onToggle}
+        className="flex items-center gap-1 transition-colors hover:text-ink"
+        title={collapsed ? `${label} 펼치기` : `${label} 접기`}
+      >
+        <span>{label}</span>
+        {collapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+      </button>
+      {action}
+    </div>
+  )
+}
+
+function TokenBadge({ tokens }: { tokens: number | null }): React.JSX.Element | null {
+  if (tokens === null) return null
+  const over = tokens > TOKEN_LIMIT
+  return (
+    <span
+      className={
+        'rounded bg-paper px-1.5 py-0.5 font-mono text-[10.5px] ' +
+        (over ? 'text-danger' : 'text-faint')
+      }
+      title={
+        over
+          ? `한도 초과 — ${tokens}/${TOKEN_LIMIT} 토큰. 초과분은 잘려서 반영되지 않습니다`
+          : `최종 프롬프트 ${tokens}/${TOKEN_LIMIT} 토큰`
+      }
     >
-      <span>{label}</span>
-      {collapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
-    </button>
+      {tokens}/{TOKEN_LIMIT}
+    </span>
+  )
+}
+
+type SplitPartKey = 'base' | 'additional' | 'detail'
+type SplitPromptParts = Record<SplitPartKey, string>
+
+const SPLIT_PARTS: { key: SplitPartKey; label: string; placeholder: string }[] = [
+  { key: 'base', label: '고정', placeholder: '항상 유지할 기본 프롬프트' },
+  { key: 'additional', label: '가변', placeholder: '매번 지우고 바꿀 프롬프트' },
+  { key: 'detail', label: '디테일', placeholder: '품질, 구도, 세부 묘사' }
+]
+
+const SPLIT_COLLAPSED_KEY = 'prompt_split_collapsed'
+const SPLIT_SIZES_KEY = 'prompt_split_sizes'
+
+function loadSplitCollapsed(): Record<SplitPartKey, boolean> {
+  const fallback = { base: false, additional: false, detail: false }
+  try {
+    const raw = JSON.parse(localStorage.getItem(SPLIT_COLLAPSED_KEY) ?? '{}') as Partial<
+      Record<SplitPartKey, boolean>
+    >
+    return {
+      base: raw.base === true,
+      additional: raw.additional === true,
+      detail: raw.detail === true
+    }
+  } catch {
+    return fallback
+  }
+}
+
+function loadSplitSizes(): Record<SplitPartKey, number> {
+  try {
+    const raw = JSON.parse(localStorage.getItem(SPLIT_SIZES_KEY) ?? '{}') as Partial<
+      Record<SplitPartKey, number>
+    >
+    const base = typeof raw.base === 'number' ? raw.base : 0.34
+    const additional = typeof raw.additional === 'number' ? raw.additional : 0.33
+    const detail = typeof raw.detail === 'number' ? raw.detail : 0.33
+    return { base, additional, detail }
+  } catch {
+    return { base: 0.34, additional: 0.33, detail: 0.33 }
+  }
+}
+
+function SplitPromptFields({
+  parts,
+  onChange
+}: {
+  parts: SplitPromptParts
+  onChange: (patch: Partial<SplitPromptParts>) => void
+}): React.JSX.Element {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [collapsed, setCollapsed] = useState(loadSplitCollapsed)
+  const [sizes, setSizes] = useState(loadSplitSizes)
+  const sizesRef = useRef(sizes)
+  useEffect(() => {
+    sizesRef.current = sizes
+  }, [sizes])
+
+  const openKeys = SPLIT_PARTS.filter((part) => !collapsed[part.key]).map((part) => part.key)
+
+  const togglePart = (key: SplitPartKey): void => {
+    setCollapsed((current) => {
+      const next = { ...current, [key]: !current[key] }
+      localStorage.setItem(SPLIT_COLLAPSED_KEY, JSON.stringify(next))
+      return next
+    })
+  }
+
+  const startSplitResize = (
+    before: SplitPartKey,
+    after: SplitPartKey,
+    e: React.MouseEvent<HTMLDivElement>
+  ): void => {
+    e.preventDefault()
+    const area = containerRef.current
+    if (!area) return
+    const startY = e.clientY
+    const start = sizesRef.current
+    const beforeStart = start[before]
+    const afterStart = start[after]
+    const pairTotal = beforeStart + afterStart
+    const min = Math.min(0.16, pairTotal / 2)
+
+    const onMove = (ev: MouseEvent): void => {
+      const height = Math.max(1, area.getBoundingClientRect().height)
+      const delta = (ev.clientY - startY) / height
+      const nextBefore = Math.min(pairTotal - min, Math.max(min, beforeStart + delta))
+      const nextAfter = pairTotal - nextBefore
+      setSizes((current) => {
+        const next = { ...current, [before]: nextBefore, [after]: nextAfter }
+        sizesRef.current = next
+        return next
+      })
+    }
+
+    const onUp = (): void => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      localStorage.setItem(SPLIT_SIZES_KEY, JSON.stringify(sizesRef.current))
+    }
+
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
+  const nextOpenAfter = (key: SplitPartKey): SplitPartKey | undefined => {
+    const index = openKeys.indexOf(key)
+    return index >= 0 ? openKeys[index + 1] : undefined
+  }
+
+  return (
+    <div ref={containerRef} className="flex min-h-0 flex-1 flex-col gap-1">
+      {SPLIT_PARTS.map((part) => {
+        const isCollapsed = collapsed[part.key]
+        const nextOpen = isCollapsed ? undefined : nextOpenAfter(part.key)
+        return (
+          <Fragment key={part.key}>
+            <SplitField
+              label={part.label}
+              collapsed={isCollapsed}
+              value={parts[part.key]}
+              placeholder={part.placeholder}
+              grow={sizes[part.key]}
+              onToggle={() => togglePart(part.key)}
+              onChange={(value) => onChange({ [part.key]: value })}
+            />
+            {nextOpen && (
+              <div
+                className="group -my-1 flex h-2 shrink-0 cursor-row-resize items-center justify-center"
+                onMouseDown={(e) => startSplitResize(part.key, nextOpen, e)}
+              >
+                <div className="h-0.5 w-8 rounded-full bg-line transition-colors group-hover:bg-accent/50" />
+              </div>
+            )}
+          </Fragment>
+        )
+      })}
+    </div>
+  )
+}
+
+function SplitField({
+  label,
+  collapsed,
+  value,
+  placeholder,
+  grow,
+  onToggle,
+  onChange
+}: {
+  label: string
+  collapsed: boolean
+  value: string
+  placeholder: string
+  grow: number
+  onToggle: () => void
+  onChange: (value: string) => void
+}): React.JSX.Element {
+  return (
+    <div
+      className={'flex min-h-0 flex-col gap-1 ' + (collapsed ? 'flex-none' : 'min-h-9')}
+      style={collapsed ? undefined : { flexGrow: grow, flexBasis: 0 }}
+    >
+      <CollapseHeader label={label} collapsed={collapsed} onToggle={onToggle} />
+      {!collapsed && (
+        <PromptEditor
+          className="min-h-0 flex-1"
+          value={value}
+          tokensOverride={null}
+          placeholder={placeholder}
+          onValueChange={onChange}
+        />
+      )}
+    </div>
+  )
+}
+
+/** 프롬프트 문법 도움말 — ⓘ 팝오버 (주석·조각·순차·랜덤·가중치) */
+function SyntaxHelp(): React.JSX.Element {
+  const rows: { syntax: string; desc: string }[] = [
+    { syntax: '# 메모', desc: '# 부터 줄 끝까지 주석 (전송 제외)' },
+    { syntax: '<이름>', desc: '조각 삽입 — 여러 줄이면 매 생성 랜덤 1줄' },
+    { syntax: '<*이름>', desc: '순차 선택 — 생성마다 다음 줄 (헤더 ↺로 리셋)' },
+    { syntax: '<a|b|c>', desc: '인라인 랜덤 — 셋 중 하나' },
+    { syntax: '1.3::태그::', desc: '강조 (1보다 크면 강함, 작으면 약함/음수 가능)' }
+  ]
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          className="grid size-5 place-items-center rounded text-faint transition-colors hover:text-ink"
+          title="프롬프트 문법 도움말"
+        >
+          <Info size={13} />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-72 p-2.5">
+        <p className="mb-1.5 text-[12px] font-semibold text-ink">프롬프트 문법</p>
+        <div className="flex flex-col gap-1.5">
+          {rows.map((r) => (
+            <div key={r.syntax} className="flex flex-col gap-0.5">
+              <code className="w-fit rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[11px] text-accent">
+                {r.syntax}
+              </code>
+              <span className="text-[11px] leading-snug text-muted">{r.desc}</span>
+            </div>
+          ))}
+        </div>
+      </PopoverContent>
+    </Popover>
   )
 }
 
