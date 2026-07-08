@@ -646,7 +646,7 @@ function SequenceEntryEditor({
           variant={entry.enabled ? 'default' : 'ghost'}
           onClick={() => onUpdate({ enabled: !entry.enabled })}
         >
-          {entry.enabled ? '켬' : '끔'}
+          {entry.enabled ? 'ON' : 'OFF'}
         </Button>
         <Button size="sm" variant="ghost" className="text-danger" onClick={onDelete}>
           <Trash2 size={13} />
