@@ -3,6 +3,7 @@ import { app } from 'electron'
 import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync } from 'fs'
 import { join } from 'path'
 import { migrations } from './migrations'
+import { ensureSceneAdditionSchema, isLegacyCustomV17 } from './scene-addition-schema'
 
 let db: Database.Database | null = null
 
@@ -32,8 +33,14 @@ export function initDb(): { version: number; path: string } {
   db.pragma('journal_mode = WAL')
   db.pragma('foreign_keys = ON')
 
-  const current = db.pragma('user_version', { simple: true }) as number
+  let current = db.pragma('user_version', { simple: true }) as number
   const target = migrations.length
+
+  if (current === 17 && target === 16 && isLegacyCustomV17(db)) {
+    if (existsSync(path)) backupBeforeMigration(path, current)
+    db.pragma('user_version = 16')
+    current = 16
+  }
 
   if (current < target) {
     if (current > 0 && existsSync(path)) {
@@ -53,6 +60,8 @@ export function initDb(): { version: number; path: string } {
         'NAIS3를 최신 버전으로 업데이트하세요.'
     )
   }
+
+  ensureSceneAdditionSchema(db)
 
   return { version: target, path }
 }

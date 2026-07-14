@@ -93,6 +93,12 @@ import {
   exportZip
 } from './scenes/repo'
 import {
+  applySceneCharacterAddition,
+  clearSceneCharacterAddition,
+  getSceneCharacterAddition,
+  setSceneCharacterAddition
+} from './scenes/addition-repo'
+import {
   listPromptPresets,
   createPromptPreset,
   updatePromptPreset,
@@ -186,7 +192,9 @@ export function registerIpcHandlers(ctx: { dbVersion: number; queue: GenerationQ
   })
   handle('nai:anlasUsage', () => anlasUsage())
 
-  handle('queue:enqueue', ({ request, count }) => ({ ids: ctx.queue.enqueue(request, count) }))
+  handle('queue:enqueue', ({ request, count }) => ({
+    ids: ctx.queue.enqueue(applySceneCharacterAddition(request), count)
+  }))
   handle('queue:cancel', ({ ids }) => {
     ctx.queue.cancel(ids)
   })
@@ -293,6 +301,15 @@ export function registerIpcHandlers(ctx: { dbVersion: number; queue: GenerationQ
   handle('scenes:list', ({ presetId }) => ({ items: listScenes(presetId) }))
   handle('scenes:create', ({ presetId, name }) => ({ id: createScene(presetId, name) }))
   handle('scenes:get', ({ id }) => ({ scene: getScene(id) }))
+  handle('sceneAddition:get', ({ sceneId }) => ({
+    addition: getSceneCharacterAddition(sceneId)
+  }))
+  handle('sceneAddition:set', (addition) => {
+    setSceneCharacterAddition(addition)
+  })
+  handle('sceneAddition:clear', ({ sceneId }) => {
+    clearSceneCharacterAddition(sceneId)
+  })
   handle('scenes:update', ({ id, patch }) => {
     updateScene(id, patch)
   })

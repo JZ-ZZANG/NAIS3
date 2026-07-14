@@ -1,6 +1,13 @@
 import { create } from 'zustand'
 import { recordNav } from '../lib/nav-history'
-import type { GenerationRequest, Scene, SceneCast, SceneImage, ScenePreset } from '@shared/types'
+import type {
+  GenerationRequest,
+  Scene,
+  SceneCast,
+  SceneCharacterAddition,
+  SceneImage,
+  ScenePreset
+} from '@shared/types'
 import { enabledCharacters, useCharactersStore } from './characters-store'
 import { randomSeed, useGenerationStore } from './generation-store'
 
@@ -18,6 +25,8 @@ interface ScenesState {
   selection: Set<number> // 편집 모드 체크된 씬들
   columns: number // 2~5
   cardOrientation: 'portrait' | 'landscape' | 'square' // 카드 비율 고정 (해상도 무관)
+  additionsEnabled: boolean
+  additions: Record<number, SceneCharacterAddition | null>
 
   // 상세 이미지 (페이지네이션)
   images: SceneImage[]
@@ -40,6 +49,11 @@ interface ScenesState {
   setEditMode: (v: boolean) => void
   setColumns: (n: number) => void
   setCardOrientation: (o: 'portrait' | 'landscape' | 'square') => void
+  loadAdditionsEnabled: () => Promise<void>
+  setAdditionsEnabled: (enabled: boolean) => Promise<void>
+  loadSceneAddition: (sceneId: number) => Promise<SceneCharacterAddition | null>
+  setSceneAddition: (addition: SceneCharacterAddition) => Promise<void>
+  clearSceneAddition: (sceneId: number) => Promise<void>
   toggleSelected: (id: number) => void
   /** 쉬프트 클릭 — 마지막 클릭 씬과 이 씬 사이(양끝 포함)를 모두 선택 */
   rangeSelect: (id: number) => void
@@ -168,6 +182,8 @@ export const useScenesStore = create<ScenesState>((set, get) => ({
   cardOrientation:
     (localStorage.getItem('scene_orientation') as 'portrait' | 'landscape' | 'square') ||
     'portrait',
+  additionsEnabled: false,
+  additions: {},
   images: [],
   imagesTotal: 0,
   imagesLoading: false,
@@ -238,6 +254,33 @@ export const useScenesStore = create<ScenesState>((set, get) => ({
   setCardOrientation: (cardOrientation) => {
     set({ cardOrientation })
     localStorage.setItem('scene_orientation', cardOrientation)
+  },
+  loadAdditionsEnabled: async () => {
+    const { value } = await window.nais.invoke('settings:get', { key: 'scene_additions_enabled' })
+    set({ additionsEnabled: value === '1' })
+  },
+  setAdditionsEnabled: async (additionsEnabled) => {
+    set({ additionsEnabled })
+    await window.nais.invoke('settings:set', {
+      key: 'scene_additions_enabled',
+      value: additionsEnabled ? '1' : '0'
+    })
+  },
+  loadSceneAddition: async (sceneId) => {
+    const { addition } = await window.nais.invoke('sceneAddition:get', { sceneId })
+    set({ additions: { ...get().additions, [sceneId]: addition } })
+    return addition
+  },
+  setSceneAddition: async (addition) => {
+    const empty =
+      !addition.characterPromptIds.length && !addition.charRefIds.length && !addition.vibeIds.length
+    set({ additions: { ...get().additions, [addition.sceneId]: empty ? null : addition } })
+    if (empty) await window.nais.invoke('sceneAddition:clear', { sceneId: addition.sceneId })
+    else await window.nais.invoke('sceneAddition:set', addition)
+  },
+  clearSceneAddition: async (sceneId) => {
+    set({ additions: { ...get().additions, [sceneId]: null } })
+    await window.nais.invoke('sceneAddition:clear', { sceneId })
   },
   toggleSelected: (id) => {
     const next = new Set(get().selection)

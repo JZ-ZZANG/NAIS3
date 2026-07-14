@@ -287,6 +287,13 @@ export interface SceneCast {
   vibeIds: number[]
 }
 
+export interface SceneCharacterAddition {
+  sceneId: number
+  characterPromptIds: number[]
+  charRefIds: number[]
+  vibeIds: number[]
+}
+
 export interface Scene {
   id: number
   presetId: number
@@ -499,6 +506,12 @@ export interface IpcInvokeMap {
   'scenes:list': { req: { presetId: number }; res: { items: Scene[] } }
   'scenes:create': { req: { presetId: number; name: string }; res: { id: number } }
   'scenes:get': { req: { id: number }; res: { scene: Scene | null } }
+  'sceneAddition:get': {
+    req: { sceneId: number }
+    res: { addition: SceneCharacterAddition | null }
+  }
+  'sceneAddition:set': { req: SceneCharacterAddition; res: void }
+  'sceneAddition:clear': { req: { sceneId: number }; res: void }
   'scenes:update': {
     req: {
       id: number

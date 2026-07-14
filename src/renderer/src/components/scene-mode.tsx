@@ -18,6 +18,7 @@ import {
   SlidersHorizontal,
   Square,
   Trash2,
+  UserPlus,
   UsersRound
 } from 'lucide-react'
 import {
@@ -42,6 +43,7 @@ import { askConfirm, askText } from '../stores/dialog-store'
 import { toast } from '../stores/toast-store'
 import { cn } from '../lib/utils'
 import { SceneCastDialog } from './scene-cast-dialog'
+import { SceneAdditionDialog } from './scene-addition-dialog'
 import { SceneDetail } from './scene-detail'
 import { SortableList, SortableRow } from './sortable-list'
 import { Button } from './ui/button'
@@ -60,11 +62,13 @@ export function SceneMode(): React.JSX.Element {
   const scenes = useScenesStore((s) => s.scenes)
   const selectedId = useScenesStore((s) => s.selectedId)
   const loadPresets = useScenesStore((s) => s.loadPresets)
+  const loadAdditionsEnabled = useScenesStore((s) => s.loadAdditionsEnabled)
 
   useEffect(() => {
     void loadPresets()
+    void loadAdditionsEnabled()
     void loadCasts() // 출연 목록 복원 (1회)
-  }, [loadPresets])
+  }, [loadPresets, loadAdditionsEnabled])
 
   const selected = scenes.find((s) => s.id === selectedId) ?? null
   if (selected) return <SceneDetail scene={selected} />
@@ -308,6 +312,8 @@ function SceneGrid(): React.JSX.Element {
   const adjustReserveAll = useScenesStore((s) => s.adjustReserveAll)
   const clearReserveAll = useScenesStore((s) => s.clearReserveAll)
   const reorder = useScenesStore((s) => s.reorder)
+  const additionsEnabled = useScenesStore((s) => s.additionsEnabled)
+  const setAdditionsEnabled = useScenesStore((s) => s.setAdditionsEnabled)
 
   // 스크롤 위치 복원 — 마운트 직후 + 씬 목록이 늦게 로드된 경우 한 번 더
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -378,6 +384,12 @@ function SceneGrid(): React.JSX.Element {
           tip="편집 모드"
           active={editMode}
           onClick={() => setEditMode(!editMode)}
+        />
+        <IconBtn
+          icon={<UserPlus size={16} />}
+          tip="씬별 캐릭터 추가"
+          active={additionsEnabled}
+          onClick={() => void setAdditionsEnabled(!additionsEnabled)}
         />
 
         <div className="flex-1" />
@@ -707,7 +719,10 @@ const SceneCard = memo(function SceneCard({
   const adjustReserve = useScenesStore((s) => s.adjustReserve)
   const casts = useScenesStore((s) => s.casts)
   const activeCastId = useScenesStore((s) => s.activeCastId)
+  const additionsEnabled = useScenesStore((s) => s.additionsEnabled)
+  const addition = useScenesStore((s) => s.additions[scene.id])
   const sortable = useSortable({ id: `scene-${scene.id}` })
+  const [additionOpen, setAdditionOpen] = useState(false)
 
   // +/- 는 현재 선택된 출연의 예약을 조작하므로 그 출연의 수만 표시 (배지가 전체 내역 담당)
   const activeCast = casts.find((c) => c.id === activeCastId) ?? null
@@ -876,6 +891,18 @@ const SceneCard = memo(function SceneCard({
                 onClick={(e) => e.stopPropagation()}
                 onPointerDown={(e) => e.stopPropagation()}
               >
+                {additionsEnabled && (
+                  <button
+                    className={cn(
+                      'grid size-5 place-items-center rounded-full text-white hover:bg-white/20',
+                      addition && 'bg-accent'
+                    )}
+                    onClick={() => setAdditionOpen(true)}
+                    title="씬별 캐릭터 추가"
+                  >
+                    <UserPlus size={12} />
+                  </button>
+                )}
                 <button
                   className="grid size-5 place-items-center rounded-full text-white hover:bg-white/20 disabled:opacity-30"
                   disabled={ctxCount === 0}
@@ -904,6 +931,7 @@ const SceneCard = memo(function SceneCard({
               </div>
             </div>
           </div>
+          <SceneAdditionDialog scene={scene} open={additionOpen} onOpenChange={setAdditionOpen} />
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent>
