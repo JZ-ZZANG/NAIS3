@@ -287,6 +287,16 @@ export interface SceneCast {
   vibeIds: number[]
 }
 
+/**
+ * 개인 마이너 버전의 출연 그룹. 그룹은 예약 입력 편의 기능일 뿐이며,
+ * 실제 씬 예약에는 항상 기존 SceneCast id들로 펼쳐서 기록한다.
+ */
+export interface SceneCastGroup {
+  id: string
+  name: string
+  castIds: string[]
+}
+
 export interface SceneCharacterAddition {
   sceneId: number
   characterPromptIds: number[]

@@ -4,6 +4,7 @@ import type {
   GenerationRequest,
   Scene,
   SceneCast,
+  SceneCastGroup,
   SceneCharacterAddition,
   SceneImage,
   ScenePreset
@@ -75,6 +76,12 @@ interface ScenesState {
   addCast: (data: Pick<SceneCast, 'name' | 'characterIds' | 'charRefIds' | 'vibeIds'>) => void
   updateCast: (id: string, patch: Partial<SceneCast>) => void
   removeCast: (id: string) => void
+  groups: SceneCastGroup[]
+  activeGroupId: string
+  setActiveGroup: (id: string) => void
+  addGroup: (data: Pick<SceneCastGroup, 'name' | 'castIds'>) => void
+  updateGroup: (id: string, patch: Partial<SceneCastGroup>) => void
+  removeGroup: (id: string) => void
 
   // 예약
   /** 모든 프리셋의 예약 총합 — 좌측 "씬 생성 n장" 표시 (예약 수 = 생성 수) */
@@ -346,12 +353,14 @@ export const useScenesStore = create<ScenesState>((set, get) => ({
     if (!scene) return
     // 예약은 배치 생성 개수 단위로 (배치 3이면 +3/-3 — NAIS2 워크플로).
     // 현재 선택된 출연의 예약을 증감 — 예약이 "누구로 뽑을지"를 기억한다
-    const castId = get().activeCastId
+    const castIds = activeReserveCastIds(get())
     const step = delta * (useGenerationStore.getState().batchCount || 1)
     const reserves = { ...scene.reserves }
-    const next = Math.max(0, (reserves[castId] ?? 0) + step)
-    if (next > 0) reserves[castId] = next
-    else delete reserves[castId]
+    for (const castId of castIds) {
+      const next = Math.max(0, (reserves[castId] ?? 0) + step)
+      if (next > 0) reserves[castId] = next
+      else delete reserves[castId]
+    }
     const reserveCount = Object.values(reserves).reduce((a, b) => a + b, 0)
     set({
       scenes: get().scenes.map((s) => (s.id === id ? { ...s, reserves, reserveCount } : s))
@@ -360,22 +369,28 @@ export const useScenesStore = create<ScenesState>((set, get) => ({
     void get().refreshReservedTotal()
   },
   adjustReserveAll: async (delta) => {
-    const castId = get().activeCastId
+    const castIds = activeReserveCastIds(get())
     const step = delta * (useGenerationStore.getState().batchCount || 1)
     set({
       scenes: get().scenes.map((s) => {
         const reserves = { ...s.reserves }
-        const next = Math.max(0, (reserves[castId] ?? 0) + step)
-        if (next > 0) reserves[castId] = next
-        else delete reserves[castId]
+        for (const castId of castIds) {
+          const next = Math.max(0, (reserves[castId] ?? 0) + step)
+          if (next > 0) reserves[castId] = next
+          else delete reserves[castId]
+        }
         return { ...s, reserves, reserveCount: Object.values(reserves).reduce((a, b) => a + b, 0) }
       })
     })
-    await window.nais.invoke('scenes:adjustReserveAll', {
-      presetId: get().activePresetId,
-      castId,
-      delta: step
-    })
+    await Promise.all(
+      castIds.map((castId) =>
+        window.nais.invoke('scenes:adjustReserveAll', {
+          presetId: get().activePresetId,
+          castId,
+          delta: step
+        })
+      )
+    )
     void get().refreshReservedTotal()
   },
   clearReserveAll: async () => {
@@ -525,20 +540,26 @@ export const useScenesStore = create<ScenesState>((set, get) => ({
     const scene = get().scenes.find((s) => s.id === sceneId)
     if (!scene) return
     // 단건 생성도 현재 선택된 출연으로 (셀렉터가 곧 "지금 누구로 뽑는지")
-    const castId = get().activeCastId
-    const cast = castId === '' ? null : (get().casts.find((c) => c.id === castId) ?? null)
-    await window.nais.invoke('queue:enqueue', {
-      request: { ...buildSceneRequest(scene, cast), seed: sceneSeed(0) },
-      count: 1
-    })
+    const casts = get().casts
+    const castIds = activeReserveCastIds(get())
+    for (let i = 0; i < castIds.length; i++) {
+      const castId = castIds[i]
+      const cast = castId === '' ? null : (casts.find((c) => c.id === castId) ?? null)
+      if (castId !== '' && !cast) continue
+      await window.nais.invoke('queue:enqueue', {
+        request: { ...buildSceneRequest(scene, cast), seed: sceneSeed(i) },
+        count: 1
+      })
+    }
   },
 
   // ── 출연(Cast) ──────────────────────────────────────────
   casts: [],
   activeCastId: localStorage.getItem('scene_active_cast') ?? '',
   setActiveCast: (activeCastId) => {
-    set({ activeCastId })
+    set({ activeCastId, activeGroupId: '' })
     localStorage.setItem('scene_active_cast', activeCastId)
+    localStorage.removeItem('scene_active_cast_group')
   },
   addCast: (data) => {
     const cast: SceneCast = {
@@ -557,8 +578,51 @@ export const useScenesStore = create<ScenesState>((set, get) => ({
     set({ casts: get().casts.filter((c) => c.id !== id) })
     if (get().activeCastId === id) get().setActiveCast('')
     persistCasts()
+    const groups = get().groups.map((g) => ({ ...g, castIds: g.castIds.filter((v) => v !== id) }))
+    set({ groups })
+    persistGroups()
+  },
+  groups: [],
+  activeGroupId: localStorage.getItem('scene_active_cast_group') ?? '',
+  setActiveGroup: (activeGroupId) => {
+    set({ activeGroupId, activeCastId: '' })
+    localStorage.setItem('scene_active_cast_group', activeGroupId)
+    localStorage.setItem('scene_active_cast', '')
+  },
+  addGroup: (data) => {
+    const group: SceneCastGroup = {
+      id: `g${Date.now()}${Math.random().toString(36).slice(2, 7)}`,
+      name: data.name,
+      castIds: [...new Set(data.castIds)]
+    }
+    set({ groups: [...get().groups, group] })
+    persistGroups()
+  },
+  updateGroup: (id, patch) => {
+    set({
+      groups: get().groups.map((g) =>
+        g.id === id
+          ? { ...g, ...patch, castIds: patch.castIds ? [...new Set(patch.castIds)] : g.castIds }
+          : g
+      )
+    })
+    persistGroups()
+  },
+  removeGroup: (id) => {
+    set({ groups: get().groups.filter((g) => g.id !== id) })
+    if (get().activeGroupId === id) get().setActiveCast('')
+    persistGroups()
   }
 }))
+
+/** 현재 예약 대상. 그룹은 유효한 출연 id들로 즉시 펼쳐 DB 형식을 바꾸지 않는다. */
+function activeReserveCastIds(state: ScenesState): string[] {
+  if (!state.activeGroupId) return [state.activeCastId]
+  const group = state.groups.find((g) => g.id === state.activeGroupId)
+  if (!group) return ['']
+  const valid = new Set(state.casts.map((c) => c.id))
+  return group.castIds.filter((id) => valid.has(id))
+}
 
 /** 씬 생성 시드 — 시드 고정을 존중 (고정이면 base+offset, 아니면 랜덤) */
 function sceneSeed(offset: number): number {
@@ -599,27 +663,69 @@ function persistCasts(): void {
   }, 300)
 }
 
+const CAST_GROUPS_KEY = 'scene_cast_groups_personal_v1'
+let groupsSaveTimer: ReturnType<typeof setTimeout> | undefined
+function persistGroups(): void {
+  clearTimeout(groupsSaveTimer)
+  groupsSaveTimer = setTimeout(() => {
+    void window.nais.invoke('settings:set', {
+      key: CAST_GROUPS_KEY,
+      value: JSON.stringify({ version: 1, groups: useScenesStore.getState().groups })
+    })
+  }, 300)
+}
+
 /** 출연 목록 복원 — SceneMode 마운트 시 1회 */
 let castsLoaded = false
 export async function loadCasts(): Promise<void> {
   if (castsLoaded) return
   castsLoaded = true
   const { value } = await window.nais.invoke('settings:get', { key: 'scene_casts' })
-  if (!value) return
-  try {
-    const casts = JSON.parse(value) as SceneCast[]
-    if (Array.isArray(casts)) {
-      // color 없는 구버전 저장분 백필
-      const filled: SceneCast[] = []
-      for (const c of casts) filled.push(c.color ? c : { ...c, color: nextCastColor(filled) })
-      useScenesStore.setState({ casts: filled })
+  if (value) {
+    try {
+      const casts = JSON.parse(value) as SceneCast[]
+      if (Array.isArray(casts)) {
+        // color 없는 구버전 저장분 백필
+        const filled: SceneCast[] = []
+        for (const c of casts) filled.push(c.color ? c : { ...c, color: nextCastColor(filled) })
+        useScenesStore.setState({ casts: filled })
+      }
+    } catch {
+      // 깨진 저장값은 무시
     }
-  } catch {
-    // 깨진 저장값은 무시
   }
   // 삭제된 출연이 활성으로 남아있으면 사이드바로
   const st = useScenesStore.getState()
   if (st.activeCastId && !st.casts.some((c) => c.id === st.activeCastId)) st.setActiveCast('')
+
+  // 개인 마이너 기능: 독립 settings JSON만 사용하며 DB 스키마/예약 포맷은 변경하지 않는다.
+  const groupSetting = await window.nais.invoke('settings:get', { key: CAST_GROUPS_KEY })
+  if (groupSetting.value) {
+    try {
+      const parsed = JSON.parse(groupSetting.value) as { version?: unknown; groups?: unknown }
+      if (parsed.version === 1 && Array.isArray(parsed.groups)) {
+        const validGroups = parsed.groups.filter(
+          (g): g is SceneCastGroup =>
+            typeof g === 'object' &&
+            g != null &&
+            typeof (g as SceneCastGroup).id === 'string' &&
+            typeof (g as SceneCastGroup).name === 'string' &&
+            Array.isArray((g as SceneCastGroup).castIds) &&
+            (g as SceneCastGroup).castIds.every((id) => typeof id === 'string')
+        )
+        useScenesStore.setState({ groups: validGroups })
+      }
+    } catch {
+      // 깨진/미지원 버전의 개인 설정은 무시해 앱 실행을 보장한다.
+    }
+  }
+  const afterGroups = useScenesStore.getState()
+  if (
+    afterGroups.activeGroupId &&
+    !afterGroups.groups.some((g) => g.id === afterGroups.activeGroupId)
+  ) {
+    afterGroups.setActiveCast('')
+  }
 }
 
 /**

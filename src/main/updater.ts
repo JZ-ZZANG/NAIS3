@@ -12,7 +12,7 @@ import { broadcast } from './ipc'
 const { autoUpdater } = electronUpdater
 const execFileP = promisify(execFile)
 
-const REPO = 'sunanakgo/NAIS3'
+const REPO = 'JZ-ZZANG/NAIS3'
 const RELEASE_PAGE = `https://github.com/${REPO}/releases/latest`
 
 /**

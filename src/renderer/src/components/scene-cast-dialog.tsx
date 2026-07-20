@@ -1,11 +1,14 @@
 import { useState } from 'react'
 import {
   Check,
+  ChevronDown,
+  ChevronRight,
   ImageIcon,
   Pencil,
   Plus,
   Trash2,
   UserRound,
+  UsersRound,
   Waves,
   X,
   type LucideIcon
@@ -30,6 +33,10 @@ export function SceneCastDialog({ onClose }: { onClose: () => void }): React.JSX
   const addCast = useScenesStore((s) => s.addCast)
   const updateCast = useScenesStore((s) => s.updateCast)
   const removeCast = useScenesStore((s) => s.removeCast)
+  const groups = useScenesStore((s) => s.groups)
+  const addGroup = useScenesStore((s) => s.addGroup)
+  const updateGroup = useScenesStore((s) => s.updateGroup)
+  const removeGroup = useScenesStore((s) => s.removeGroup)
   const characters = useCharactersStore((s) => s.items)
   const charFolders = useCharactersStore((s) => s.folders)
   const charRefs = useCharRefsStore((s) => s.items) as CharRefItem[]
@@ -41,6 +48,10 @@ export function SceneCastDialog({ onClose }: { onClose: () => void }): React.JSX
   const [characterIds, setCharacterIds] = useState<number[]>([])
   const [charRefIds, setCharRefIds] = useState<number[]>([])
   const [vibeIds, setVibeIds] = useState<number[]>([])
+  const [editingGroupId, setEditingGroupId] = useState<string | null>(null)
+  const [groupName, setGroupName] = useState('')
+  const [groupCastIds, setGroupCastIds] = useState<string[]>([])
+  const [openSection, setOpenSection] = useState<'casts' | 'groups'>('casts')
 
   const editing = editingId ? (casts.find((c) => c.id === editingId) ?? null) : null
   const builderColor = editing ? editing.color : nextCastColor(casts)
@@ -58,6 +69,7 @@ export function SceneCastDialog({ onClose }: { onClose: () => void }): React.JSX
   }
 
   const startEdit = (cast: SceneCast): void => {
+    setOpenSection('casts')
     setEditingId(cast.id)
     setName(cast.name)
     setCharacterIds(cast.characterIds)
@@ -75,6 +87,23 @@ export function SceneCastDialog({ onClose }: { onClose: () => void }): React.JSX
     if (editingId) updateCast(editingId, data)
     else addCast(data)
     resetBuilder()
+  }
+
+  const resetGroupBuilder = (): void => {
+    setEditingGroupId(null)
+    setGroupName('')
+    setGroupCastIds([])
+  }
+
+  const submitGroup = (): void => {
+    if (!groupCastIds.length) return
+    const data = {
+      name: groupName.trim() || `그룹 ${groups.length + 1}`,
+      castIds: groupCastIds
+    }
+    if (editingGroupId) updateGroup(editingGroupId, data)
+    else addGroup(data)
+    resetGroupBuilder()
   }
 
   return (
@@ -199,30 +228,187 @@ export function SceneCastDialog({ onClose }: { onClose: () => void }): React.JSX
           </div>
         </div>
 
-        {/* ── 출연 목록 ── */}
-        <div className="flex shrink-0 items-center justify-between px-5 pb-1 pt-2.5">
-          <span className="text-[12px] font-medium text-muted">{casts.length}개 출연</span>
-        </div>
-        <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto px-5 pb-5">
-          {casts.length === 0 ? (
-            <div className="flex flex-col items-center gap-2 rounded-xl border-2 border-dashed border-line py-8 text-faint">
-              <UserRound size={32} strokeWidth={1.2} className="opacity-40" />
-              <p className="text-[12.5px]">위에서 선택 후 &quot;출연 추가&quot;를 누르세요.</p>
+        {/* 두 목록은 한쪽만 펼쳐 작은 화면에서도 남은 높이를 온전히 사용한다. */}
+        <div className="flex min-h-0 flex-1 flex-col border-t border-line">
+          <button
+            className={cn(
+              'flex h-10 shrink-0 items-center gap-2 px-5 text-left hover:bg-surface-2',
+              openSection === 'casts' && 'border-b border-line bg-surface-2/40'
+            )}
+            onClick={() => setOpenSection('casts')}
+          >
+            {openSection === 'casts' ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            <UserRound size={14} className="text-sky-500" />
+            <span className="text-[12.5px] font-medium">출연 목록</span>
+            <span className="rounded-full border border-line px-1.5 text-[10px] text-muted">
+              {casts.length}개
+            </span>
+          </button>
+          {openSection === 'casts' && (
+            <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto px-5 py-3">
+              {casts.length === 0 ? (
+                <div className="flex flex-col items-center gap-2 rounded-xl border-2 border-dashed border-line py-8 text-faint">
+                  <UserRound size={32} strokeWidth={1.2} className="opacity-40" />
+                  <p className="text-[12.5px]">위에서 선택 후 &quot;출연 추가&quot;를 누르세요.</p>
+                </div>
+              ) : (
+                casts.map((cast) => (
+                  <CastRow
+                    key={cast.id}
+                    cast={cast}
+                    editing={cast.id === editingId}
+                    characters={characters}
+                    onEdit={() => startEdit(cast)}
+                    onRemove={() => {
+                      if (cast.id === editingId) resetBuilder()
+                      removeCast(cast.id)
+                    }}
+                  />
+                ))
+              )}
             </div>
-          ) : (
-            casts.map((cast) => (
-              <CastRow
-                key={cast.id}
-                cast={cast}
-                editing={cast.id === editingId}
-                characters={characters}
-                onEdit={() => startEdit(cast)}
-                onRemove={() => {
-                  if (cast.id === editingId) resetBuilder()
-                  removeCast(cast.id)
-                }}
-              />
-            ))
+          )}
+
+          <button
+            className={cn(
+              'flex h-10 shrink-0 items-center gap-2 border-t border-line px-5 text-left hover:bg-surface-2',
+              openSection === 'groups' && 'border-b bg-surface-2/40'
+            )}
+            onClick={() => setOpenSection('groups')}
+          >
+            {openSection === 'groups' ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            <UsersRound size={14} className="text-accent" />
+            <span className="text-[12.5px] font-medium">출연 그룹</span>
+            <span className="rounded-full border border-line px-1.5 text-[10px] text-muted">
+              {groups.length}개
+            </span>
+            <span className="text-[11px] text-faint">한 번에 여러 출연을 예약합니다.</span>
+          </button>
+
+          {openSection === 'groups' && (
+            <div className="flex min-h-0 flex-1 flex-col px-5 pb-5 pt-3">
+              <div className="mb-2 flex items-center gap-2">
+                <Input
+                  className="h-8 max-w-xs"
+                  value={groupName}
+                  placeholder={`그룹 이름 (비우면 "그룹 ${groups.length + 1}")`}
+                  onChange={(e) => setGroupName(e.target.value)}
+                />
+                {editingGroupId && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="gap-1 text-muted"
+                    onClick={resetGroupBuilder}
+                  >
+                    <X size={13} /> 편집 취소
+                  </Button>
+                )}
+                <Button
+                  size="sm"
+                  variant="accent"
+                  className="gap-1"
+                  disabled={groupCastIds.length === 0}
+                  onClick={submitGroup}
+                >
+                  {editingGroupId ? <Check size={13} /> : <Plus size={13} />}
+                  {editingGroupId ? '그룹 변경 저장' : '그룹 추가'}
+                </Button>
+              </div>
+              <div className="mb-2 flex max-h-24 flex-wrap content-start gap-1.5 overflow-y-auto rounded-md border border-line bg-paper p-2">
+                {casts.length === 0 ? (
+                  <EmptyNote text="먼저 출연을 추가하세요." />
+                ) : (
+                  casts.map((cast) => {
+                    const selected = groupCastIds.includes(cast.id)
+                    return (
+                      <button
+                        key={cast.id}
+                        className={cn(
+                          'flex items-center gap-1.5 rounded-full border px-2 py-1 text-[11.5px]',
+                          selected
+                            ? 'border-accent bg-accent/10 text-accent'
+                            : 'border-line text-muted hover:bg-surface-2'
+                        )}
+                        onClick={() =>
+                          setGroupCastIds(
+                            selected
+                              ? groupCastIds.filter((id) => id !== cast.id)
+                              : [...groupCastIds, cast.id]
+                          )
+                        }
+                      >
+                        <span
+                          className="size-2 rounded-full"
+                          style={{ backgroundColor: cast.color }}
+                        />
+                        {cast.name || '이름 없음'}
+                      </button>
+                    )
+                  })
+                )}
+              </div>
+              <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto">
+                {groups.length === 0 ? (
+                  <p className="py-3 text-center text-[11.5px] text-faint">
+                    출연을 선택해 그룹을 추가하세요.
+                  </p>
+                ) : (
+                  groups.map((group) => {
+                    const members = group.castIds
+                      .map((id) => casts.find((c) => c.id === id))
+                      .filter((c) => c != null)
+                    return (
+                      <div
+                        key={group.id}
+                        className={cn(
+                          'flex items-center gap-2 rounded-lg border border-line bg-surface-2/40 px-3 py-2',
+                          editingGroupId === group.id && 'border-accent/60 ring-1 ring-accent/40'
+                        )}
+                      >
+                        <UsersRound size={14} className="shrink-0 text-accent" />
+                        <span className="shrink-0 text-[13px] font-semibold">
+                          {group.name || '이름 없음'}
+                        </span>
+                        <span className="min-w-0 flex-1 truncate text-[11.5px] text-muted">
+                          {members.map((c) => c.name || '이름 없음').join(', ') ||
+                            '유효한 출연 없음'}
+                        </span>
+                        <span className="shrink-0 text-[10.5px] text-faint">
+                          {members.length}명
+                        </span>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 w-7 shrink-0 p-0 text-muted"
+                          title="그룹 편집"
+                          onClick={() => {
+                            setOpenSection('groups')
+                            setEditingGroupId(group.id)
+                            setGroupName(group.name)
+                            setGroupCastIds(members.map((c) => c.id))
+                          }}
+                        >
+                          <Pencil size={13} />
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 w-7 shrink-0 p-0 text-danger"
+                          title="그룹 삭제 (기존 출연별 예약은 유지됨)"
+                          onClick={() => {
+                            if (editingGroupId === group.id) resetGroupBuilder()
+                            removeGroup(group.id)
+                          }}
+                        >
+                          <Trash2 size={13} />
+                        </Button>
+                      </div>
+                    )
+                  })
+                )}
+              </div>
+            </div>
           )}
         </div>
       </DialogContent>

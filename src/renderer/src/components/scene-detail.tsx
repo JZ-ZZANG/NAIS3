@@ -21,6 +21,13 @@ export function SceneDetail({ scene }: { scene: Scene }): React.JSX.Element {
   const casts = useScenesStore((s) => s.casts)
   const activeCastId = useScenesStore((s) => s.activeCastId)
   const activeCast = casts.find((c) => c.id === activeCastId) ?? null
+  const groups = useScenesStore((s) => s.groups)
+  const activeGroupId = useScenesStore((s) => s.activeGroupId)
+  const activeGroup = groups.find((g) => g.id === activeGroupId) ?? null
+  const groupCastIds = activeGroup?.castIds.filter((id) => casts.some((c) => c.id === id)) ?? []
+  const contextReserveCount = activeGroup
+    ? groupCastIds.reduce((sum, id) => sum + (scene.reserves[id] ?? 0), 0)
+    : (scene.reserves[activeCastId] ?? 0)
   const images = useScenesStore((s) => s.images)
   const imagesTotal = useScenesStore((s) => s.imagesTotal)
   const imagesLoading = useScenesStore((s) => s.imagesLoading)
@@ -153,7 +160,11 @@ export function SceneDetail({ scene }: { scene: Scene }): React.JSX.Element {
           size="sm"
           variant="accent"
           className="gap-1"
-          title="이 씬 1장 바로 생성"
+          title={
+            activeGroup
+              ? `이 씬을 그룹의 ${groupCastIds.length}개 출연으로 바로 생성`
+              : '이 씬 1장 바로 생성'
+          }
           onClick={() => void generateOne(scene.id)}
         >
           <Play size={13} /> 생성
@@ -162,7 +173,7 @@ export function SceneDetail({ scene }: { scene: Scene }): React.JSX.Element {
         <div className="flex items-center gap-0.5 rounded-full bg-surface-2 p-0.5">
           <button
             className="grid size-6 place-items-center rounded-full text-muted hover:bg-paper disabled:opacity-30"
-            disabled={(scene.reserves[activeCastId] ?? 0) === 0}
+            disabled={contextReserveCount === 0}
             onClick={() => void adjustReserve(scene.id, -1)}
           >
             <Minus size={14} />
@@ -170,16 +181,23 @@ export function SceneDetail({ scene }: { scene: Scene }): React.JSX.Element {
           <span
             className={cn(
               'min-w-6 rounded-full px-1 text-center text-[13px] font-semibold',
-              !activeCast && (scene.reserves[''] ?? 0) > 0 && 'bg-danger text-white'
+              !activeCast && !activeGroup && contextReserveCount > 0 && 'bg-danger text-white',
+              activeGroup && contextReserveCount > 0 && 'bg-accent text-white'
             )}
             style={
-              activeCast && (scene.reserves[activeCastId] ?? 0) > 0
+              activeCast && contextReserveCount > 0
                 ? { backgroundColor: activeCast.color, color: '#fff' }
                 : undefined
             }
-            title={activeCast ? `"${activeCast.name}" 출연 예약` : '사이드바 설정 예약'}
+            title={
+              activeGroup
+                ? `"${activeGroup.name}" 그룹 예약 합계 (${groupCastIds.length}명)`
+                : activeCast
+                  ? `"${activeCast.name}" 출연 예약`
+                  : '사이드바 설정 예약'
+            }
           >
-            {scene.reserves[activeCastId] ?? 0}
+            {contextReserveCount}
           </span>
           <button
             className="grid size-6 place-items-center rounded-full text-muted hover:bg-paper"

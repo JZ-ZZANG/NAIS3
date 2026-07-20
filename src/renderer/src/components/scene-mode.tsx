@@ -180,13 +180,23 @@ function PresetDropdown(): React.JSX.Element {
  */
 function CastSelector(): React.JSX.Element {
   const casts = useScenesStore((s) => s.casts)
+  const groups = useScenesStore((s) => s.groups)
   const activeCastId = useScenesStore((s) => s.activeCastId)
+  const activeGroupId = useScenesStore((s) => s.activeGroupId)
   const setActiveCast = useScenesStore((s) => s.setActiveCast)
+  const setActiveGroup = useScenesStore((s) => s.setActiveGroup)
   const [open, setOpen] = useState(false)
   const [manageOpen, setManageOpen] = useState(false)
 
   const active = casts.find((c) => c.id === activeCastId)
-  const label = active ? active.name || '이름 없음' : '사이드바 설정'
+  const activeGroup = groups.find((g) => g.id === activeGroupId)
+  const validGroupCount =
+    activeGroup?.castIds.filter((id) => casts.some((c) => c.id === id)).length ?? 0
+  const label = activeGroup
+    ? `${activeGroup.name || '이름 없음'} (${validGroupCount})`
+    : active
+      ? active.name || '이름 없음'
+      : '사이드바 설정'
 
   return (
     <>
@@ -195,10 +205,11 @@ function CastSelector(): React.JSX.Element {
           <button
             className={cn(
               'flex h-8 max-w-44 items-center gap-1.5 rounded-md border px-2.5 text-[12.5px] font-medium',
-              !active && 'border-line bg-paper text-muted hover:bg-surface-2'
+              !active && !activeGroup && 'border-line bg-paper text-muted hover:bg-surface-2',
+              activeGroup && 'border-accent/60 bg-accent/10 text-accent'
             )}
             style={
-              active
+              active && !activeGroup
                 ? {
                     borderColor: `${active.color}80`,
                     backgroundColor: `${active.color}1f`,
@@ -206,7 +217,11 @@ function CastSelector(): React.JSX.Element {
                   }
                 : undefined
             }
-            title="출연 — 예약(+)이 이 구성으로 기록됩니다"
+            title={
+              activeGroup
+                ? `그룹의 ${validGroupCount}개 출연에 각각 예약합니다`
+                : '출연 — 예약(+)이 이 구성으로 기록됩니다'
+            }
           >
             <UsersRound size={13} className="shrink-0" />
             <span className="min-w-0 truncate">{label}</span>
@@ -217,7 +232,7 @@ function CastSelector(): React.JSX.Element {
           <button
             className={cn(
               'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-surface-2',
-              !active && 'font-semibold text-accent'
+              !active && !activeGroup && 'font-semibold text-accent'
             )}
             onClick={() => {
               setActiveCast('')
@@ -249,6 +264,33 @@ function CastSelector(): React.JSX.Element {
               </span>
             </button>
           ))}
+          {groups.length > 0 && (
+            <>
+              <div className="my-1 h-px bg-line" />
+              <p className="px-2 py-1 text-[10px] font-semibold text-faint">출연 그룹</p>
+              {groups.map((g) => {
+                const count = g.castIds.filter((id) => casts.some((c) => c.id === id)).length
+                return (
+                  <button
+                    key={g.id}
+                    className={cn(
+                      'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-surface-2',
+                      g.id === activeGroupId && 'font-semibold text-accent'
+                    )}
+                    disabled={count === 0}
+                    onClick={() => {
+                      setActiveGroup(g.id)
+                      setOpen(false)
+                    }}
+                  >
+                    <UsersRound size={13} className="shrink-0" />
+                    <span className="min-w-0 flex-1 truncate">{g.name || '이름 없음'}</span>
+                    <span className="shrink-0 text-[10px] text-faint">{count}명</span>
+                  </button>
+                )
+              })}
+            </>
+          )}
           <div className="my-1 h-px bg-line" />
           <button
             className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] text-accent hover:bg-surface-2"
@@ -719,6 +761,8 @@ const SceneCard = memo(function SceneCard({
   const adjustReserve = useScenesStore((s) => s.adjustReserve)
   const casts = useScenesStore((s) => s.casts)
   const activeCastId = useScenesStore((s) => s.activeCastId)
+  const groups = useScenesStore((s) => s.groups)
+  const activeGroupId = useScenesStore((s) => s.activeGroupId)
   const additionsEnabled = useScenesStore((s) => s.additionsEnabled)
   const addition = useScenesStore((s) => s.additions[scene.id])
   const sortable = useSortable({ id: `scene-${scene.id}` })
@@ -726,7 +770,11 @@ const SceneCard = memo(function SceneCard({
 
   // +/- 는 현재 선택된 출연의 예약을 조작하므로 그 출연의 수만 표시 (배지가 전체 내역 담당)
   const activeCast = casts.find((c) => c.id === activeCastId) ?? null
-  const ctxCount = scene.reserves[activeCastId] ?? 0
+  const activeGroup = groups.find((g) => g.id === activeGroupId) ?? null
+  const groupCastIds = activeGroup?.castIds.filter((id) => casts.some((c) => c.id === id)) ?? []
+  const ctxCount = activeGroup
+    ? groupCastIds.reduce((sum, id) => sum + (scene.reserves[id] ?? 0), 0)
+    : (scene.reserves[activeCastId] ?? 0)
 
   const checked = selection.has(scene.id)
   // 이미지 우선순위: 생성 중 스트리밍 > 저장 썸네일(가벼움, 드래그 렉 방지) > 원본 > 없음.
@@ -913,12 +961,19 @@ const SceneCard = memo(function SceneCard({
                 <span
                   className={cn(
                     'min-w-5 rounded-full px-1 text-center text-[12px] font-medium text-white',
-                    !activeCast && ctxCount > 0 && 'bg-danger'
+                    !activeCast && !activeGroup && ctxCount > 0 && 'bg-danger',
+                    activeGroup && ctxCount > 0 && 'bg-accent'
                   )}
                   style={
                     activeCast && ctxCount > 0 ? { backgroundColor: activeCast.color } : undefined
                   }
-                  title={activeCast ? `"${activeCast.name}" 출연 예약` : '사이드바 설정 예약'}
+                  title={
+                    activeGroup
+                      ? `"${activeGroup.name}" 그룹 예약 합계 (${groupCastIds.length}명)`
+                      : activeCast
+                        ? `"${activeCast.name}" 출연 예약`
+                        : '사이드바 설정 예약'
+                  }
                 >
                   {ctxCount}
                 </span>

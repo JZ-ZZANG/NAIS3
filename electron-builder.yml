@@ -52,5 +52,5 @@ dmg:
 npmRebuild: false
 publish:
   provider: github
-  owner: sunanakgo
+  owner: JZ-ZZANG
   repo: NAIS3
