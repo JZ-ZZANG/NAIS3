@@ -1,8 +1,6 @@
 import { useState } from 'react'
 import {
   Check,
-  ChevronDown,
-  ChevronRight,
   ImageIcon,
   Pencil,
   Plus,
@@ -18,6 +16,7 @@ import { cn } from '../lib/utils'
 import { useCharactersStore } from '../stores/characters-store'
 import { useCharRefsStore, useVibesStore } from '../stores/refs-store'
 import { nextCastColor, useScenesStore } from '../stores/scenes-store'
+import { SortableList, SortableRow } from './sortable-list'
 import { Button } from './ui/button'
 import { Dialog, DialogContent, DialogTitle } from './ui/dialog'
 import { Input } from './ui/input'
@@ -37,6 +36,7 @@ export function SceneCastDialog({ onClose }: { onClose: () => void }): React.JSX
   const addGroup = useScenesStore((s) => s.addGroup)
   const updateGroup = useScenesStore((s) => s.updateGroup)
   const removeGroup = useScenesStore((s) => s.removeGroup)
+  const reorderCasts = useScenesStore((s) => s.reorderCasts)
   const characters = useCharactersStore((s) => s.items)
   const charFolders = useCharactersStore((s) => s.folders)
   const charRefs = useCharRefsStore((s) => s.items) as CharRefItem[]
@@ -228,22 +228,36 @@ export function SceneCastDialog({ onClose }: { onClose: () => void }): React.JSX
           </div>
         </div>
 
-        {/* 두 목록은 한쪽만 펼쳐 작은 화면에서도 남은 높이를 온전히 사용한다. */}
+        {/* 출연 목록/그룹은 한 줄짜리 가로 탭으로 전환해 세로 공간을 확보한다. */}
         <div className="flex min-h-0 flex-1 flex-col border-t border-line">
-          <button
-            className={cn(
-              'flex h-10 shrink-0 items-center gap-2 px-5 text-left hover:bg-surface-2',
-              openSection === 'casts' && 'border-b border-line bg-surface-2/40'
-            )}
-            onClick={() => setOpenSection('casts')}
-          >
-            {openSection === 'casts' ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-            <UserRound size={14} className="text-sky-500" />
-            <span className="text-[12.5px] font-medium">출연 목록</span>
-            <span className="rounded-full border border-line px-1.5 text-[10px] text-muted">
-              {casts.length}개
-            </span>
-          </button>
+          <div className="grid h-10 shrink-0 grid-cols-2 border-b border-line">
+            <button
+              className={cn(
+                'flex items-center justify-center gap-2 border-r border-line text-[12.5px] hover:bg-surface-2',
+                openSection === 'casts' && 'bg-surface-2/60 font-semibold text-accent'
+              )}
+              onClick={() => setOpenSection('casts')}
+            >
+              <UserRound size={14} className="text-sky-500" />
+              <span>출연 목록</span>
+              <span className="rounded-full border border-line px-1.5 text-[10px] text-muted">
+                {casts.length}개
+              </span>
+            </button>
+            <button
+              className={cn(
+                'flex items-center justify-center gap-2 text-[12.5px] hover:bg-surface-2',
+                openSection === 'groups' && 'bg-surface-2/60 font-semibold text-accent'
+              )}
+              onClick={() => setOpenSection('groups')}
+            >
+              <UsersRound size={14} className="text-accent" />
+              <span>출연 그룹</span>
+              <span className="rounded-full border border-line px-1.5 text-[10px] text-muted">
+                {groups.length}개
+              </span>
+            </button>
+          </div>
           {openSection === 'casts' && (
             <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto px-5 py-3">
               {casts.length === 0 ? (
@@ -252,38 +266,25 @@ export function SceneCastDialog({ onClose }: { onClose: () => void }): React.JSX
                   <p className="text-[12.5px]">위에서 선택 후 &quot;출연 추가&quot;를 누르세요.</p>
                 </div>
               ) : (
-                casts.map((cast) => (
-                  <CastRow
-                    key={cast.id}
-                    cast={cast}
-                    editing={cast.id === editingId}
-                    characters={characters}
-                    onEdit={() => startEdit(cast)}
-                    onRemove={() => {
-                      if (cast.id === editingId) resetBuilder()
-                      removeCast(cast.id)
-                    }}
-                  />
-                ))
+                <SortableList ids={casts.map((cast) => cast.id)} onReorder={reorderCasts}>
+                  {casts.map((cast) => (
+                    <SortableRow key={cast.id} id={cast.id}>
+                      <CastRow
+                        cast={cast}
+                        editing={cast.id === editingId}
+                        characters={characters}
+                        onEdit={() => startEdit(cast)}
+                        onRemove={() => {
+                          if (cast.id === editingId) resetBuilder()
+                          removeCast(cast.id)
+                        }}
+                      />
+                    </SortableRow>
+                  ))}
+                </SortableList>
               )}
             </div>
           )}
-
-          <button
-            className={cn(
-              'flex h-10 shrink-0 items-center gap-2 border-t border-line px-5 text-left hover:bg-surface-2',
-              openSection === 'groups' && 'border-b bg-surface-2/40'
-            )}
-            onClick={() => setOpenSection('groups')}
-          >
-            {openSection === 'groups' ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-            <UsersRound size={14} className="text-accent" />
-            <span className="text-[12.5px] font-medium">출연 그룹</span>
-            <span className="rounded-full border border-line px-1.5 text-[10px] text-muted">
-              {groups.length}개
-            </span>
-            <span className="text-[11px] text-faint">한 번에 여러 출연을 예약합니다.</span>
-          </button>
 
           {openSection === 'groups' && (
             <div className="flex min-h-0 flex-1 flex-col px-5 pb-5 pt-3">
@@ -315,7 +316,7 @@ export function SceneCastDialog({ onClose }: { onClose: () => void }): React.JSX
                   {editingGroupId ? '그룹 변경 저장' : '그룹 추가'}
                 </Button>
               </div>
-              <div className="mb-2 flex max-h-24 flex-wrap content-start gap-1.5 overflow-y-auto rounded-md border border-line bg-paper p-2">
+              <div className="mb-2 flex max-h-[4.5rem] flex-wrap content-start gap-1.5 overflow-y-auto rounded-md border border-line bg-paper p-2">
                 {casts.length === 0 ? (
                   <EmptyNote text="먼저 출연을 추가하세요." />
                 ) : (
@@ -441,7 +442,7 @@ function CastRow({
   return (
     <div
       className={cn(
-        'flex items-center gap-2.5 rounded-lg border border-line bg-surface-2/40 px-3 py-2',
+        'flex w-full items-center gap-2.5 rounded-lg border border-line bg-surface-2/40 px-3 py-2',
         editing && 'border-accent/60 ring-1 ring-accent/40'
       )}
     >

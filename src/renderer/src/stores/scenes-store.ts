@@ -82,6 +82,7 @@ interface ScenesState {
   addGroup: (data: Pick<SceneCastGroup, 'name' | 'castIds'>) => void
   updateGroup: (id: string, patch: Partial<SceneCastGroup>) => void
   removeGroup: (id: string) => void
+  reorderCasts: (ids: string[]) => void
 
   // 예약
   /** 모든 프리셋의 예약 총합 — 좌측 "씬 생성 n장" 표시 (예약 수 = 생성 수) */
@@ -612,6 +613,13 @@ export const useScenesStore = create<ScenesState>((set, get) => ({
     set({ groups: get().groups.filter((g) => g.id !== id) })
     if (get().activeGroupId === id) get().setActiveCast('')
     persistGroups()
+  },
+  reorderCasts: (ids) => {
+    const byId = new Map(get().casts.map((c) => [c.id, c]))
+    const next = ids.map((id) => byId.get(id)).filter((c): c is SceneCast => !!c)
+    if (next.length !== get().casts.length) return
+    set({ casts: next })
+    persistCasts()
   }
 }))
 
@@ -623,7 +631,6 @@ function activeReserveCastIds(state: ScenesState): string[] {
   const valid = new Set(state.casts.map((c) => c.id))
   return group.castIds.filter((id) => valid.has(id))
 }
-
 /** 씬 생성 시드 — 시드 고정을 존중 (고정이면 base+offset, 아니면 랜덤) */
 function sceneSeed(offset: number): number {
   const g = useGenerationStore.getState()

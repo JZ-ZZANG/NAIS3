@@ -242,55 +242,57 @@ function CastSelector(): React.JSX.Element {
             <span className="size-2.5 shrink-0 rounded-full bg-danger" />
             사이드바 설정
           </button>
-          {casts.map((c) => (
-            <button
-              key={c.id}
-              className={cn(
-                'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-surface-2',
-                c.id === activeCastId && 'font-semibold text-accent'
-              )}
-              onClick={() => {
-                setActiveCast(c.id)
-                setOpen(false)
-              }}
-            >
-              <span
-                className="size-2.5 shrink-0 rounded-full"
-                style={{ backgroundColor: c.color }}
-              />
-              <span className="min-w-0 flex-1 truncate">{c.name || '이름 없음'}</span>
-              <span className="shrink-0 font-mono text-[10px] text-faint">
-                {c.characterIds.length > 0 && `👤${c.characterIds.length}`}
-              </span>
-            </button>
-          ))}
-          {groups.length > 0 && (
-            <>
-              <div className="my-1 h-px bg-line" />
-              <p className="px-2 py-1 text-[10px] font-semibold text-faint">출연 그룹</p>
-              {groups.map((g) => {
-                const count = g.castIds.filter((id) => casts.some((c) => c.id === id)).length
-                return (
-                  <button
-                    key={g.id}
-                    className={cn(
-                      'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-surface-2',
-                      g.id === activeGroupId && 'font-semibold text-accent'
-                    )}
-                    disabled={count === 0}
-                    onClick={() => {
-                      setActiveGroup(g.id)
-                      setOpen(false)
-                    }}
-                  >
-                    <UsersRound size={13} className="shrink-0" />
-                    <span className="min-w-0 flex-1 truncate">{g.name || '이름 없음'}</span>
-                    <span className="shrink-0 text-[10px] text-faint">{count}명</span>
-                  </button>
-                )
-              })}
-            </>
-          )}
+          <div className="max-h-64 overflow-y-auto overflow-x-hidden no-scrollbar">
+            {casts.map((c) => (
+              <button
+                key={c.id}
+                className={cn(
+                  'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-surface-2',
+                  c.id === activeCastId && 'font-semibold text-accent'
+                )}
+                onClick={() => {
+                  setActiveCast(c.id)
+                  setOpen(false)
+                }}
+              >
+                <span
+                  className="size-2.5 shrink-0 rounded-full"
+                  style={{ backgroundColor: c.color }}
+                />
+                <span className="min-w-0 flex-1 truncate">{c.name || '이름 없음'}</span>
+                <span className="shrink-0 font-mono text-[10px] text-faint">
+                  {c.characterIds.length > 0 && `👤${c.characterIds.length}`}
+                </span>
+              </button>
+            ))}
+            {groups.length > 0 && (
+              <>
+                <div className="my-1 h-px bg-line" />
+                <p className="px-2 py-1 text-[10px] font-semibold text-faint">출연 그룹</p>
+                {groups.map((g) => {
+                  const count = g.castIds.filter((id) => casts.some((c) => c.id === id)).length
+                  return (
+                    <button
+                      key={g.id}
+                      className={cn(
+                        'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-surface-2',
+                        g.id === activeGroupId && 'font-semibold text-accent'
+                      )}
+                      disabled={count === 0}
+                      onClick={() => {
+                        setActiveGroup(g.id)
+                        setOpen(false)
+                      }}
+                    >
+                      <UsersRound size={13} className="shrink-0" />
+                      <span className="min-w-0 flex-1 truncate">{g.name || '이름 없음'}</span>
+                      <span className="shrink-0 text-[10px] text-faint">{count}명</span>
+                    </button>
+                  )
+                })}
+              </>
+            )}
+          </div>
           <div className="my-1 h-px bg-line" />
           <button
             className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] text-accent hover:bg-surface-2"
@@ -849,24 +851,39 @@ const SceneCard = memo(function SceneCard({
             </div>
           )}
 
-          {/* 예약 배지 — 좌측 상단 세로 스택: 사이드바 예약(빨강) + 출연별 고유색 */}
-          {scene.reserveCount > 0 && (
-            <div className="absolute left-1.5 top-1.5 flex flex-col items-start gap-1">
-              {reserveBadges(scene, casts).map((b) => (
-                <span
-                  key={b.key}
-                  className={cn(
-                    'grid h-6 min-w-6 place-items-center rounded-full px-1.5 text-[12px] font-bold text-white shadow',
-                    b.color === null && 'bg-danger'
+          {/* 예약 배지 — 좌측 상단 세로 스택: 사이드바 예약(빨강) + 출연별 고유색.
+              출연이 많으면 카드 아래로 뚫고 나가므로 4개까지만 보이고 나머지는 +n 요약 */}
+          {scene.reserveCount > 0 &&
+            (() => {
+              const badges = reserveBadges(scene, casts)
+              const shown = badges.slice(0, 4)
+              const rest = badges.slice(4)
+              return (
+                <div className="absolute left-1.5 top-1.5 flex flex-col items-start gap-1">
+                  {shown.map((b) => (
+                    <span
+                      key={b.key}
+                      className={cn(
+                        'grid h-6 min-w-6 place-items-center rounded-full px-1.5 text-[12px] font-bold text-white shadow',
+                        b.color === null && 'bg-danger'
+                      )}
+                      style={b.color ? { backgroundColor: b.color } : undefined}
+                      title={`${b.name} ${b.count}장`}
+                    >
+                      {b.count}
+                    </span>
+                  ))}
+                  {rest.length > 0 && (
+                    <span
+                      className="grid h-6 min-w-6 place-items-center rounded-full bg-black/60 px-1.5 text-[11px] font-bold text-white shadow"
+                      title={rest.map((b) => `${b.name} ${b.count}장`).join('\n')}
+                    >
+                      +{rest.length}
+                    </span>
                   )}
-                  style={b.color ? { backgroundColor: b.color } : undefined}
-                  title={`${b.name} ${b.count}장`}
-                >
-                  {b.count}
-                </span>
-              ))}
-            </div>
-          )}
+                </div>
+              )
+            })()}
 
           {/* 우측 상단 — 편집 모드 체크박스 / 일반 3점 메뉴 */}
           {editMode ? (

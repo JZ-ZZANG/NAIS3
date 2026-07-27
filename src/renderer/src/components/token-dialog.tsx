@@ -676,7 +676,10 @@ function AboutSection(): React.JSX.Element {
         ) : updateStatus === 'downloaded' ? (
           <span className="text-[12px] text-accent">업데이트 설치 — 곧 재시작됩니다</span>
         ) : (
-          <span className="text-[12px] text-faint">최신 버전입니다</span>
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[12px] text-faint">최신 버전입니다</span>
+            <span className="text-[12px] text-faint">이 버전은 개인 커스텀 버전입니다</span>
+          </div>
         )}
       </div>
 
