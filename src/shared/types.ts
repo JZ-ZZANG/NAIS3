@@ -36,6 +36,8 @@ export interface VibeItem {
   infoExtracted: number
   /** 현재 infoExtracted로 인코딩돼 있는지 (아니면 생성 시 2 Anlas 소모) */
   encodedReady: boolean
+  /** 현재 infoExtracted 값으로 캐시된 모델 목록 */
+  encodedModels?: string[]
   folderId: number | null
 }
 
@@ -68,6 +70,8 @@ export interface GenerationRequest {
   seed: number
   variety: boolean
   qualityToggle: boolean
+  /** V5 native alpha background generation. */
+  transparentBackground?: boolean
   ucPreset: UcPresetIndex
   characterPrompts: CharacterPromptInput[]
   useCoords: boolean
@@ -109,10 +113,20 @@ export interface QueueStatus {
   delayMs: number
 }
 
+export interface OpusUsageStatus {
+  /** Remaining rechargeable allowance, 0-100. */
+  percent: number
+  /** True once the allowance is exhausted and V5 falls back to Anlas. */
+  isNegative: boolean
+  /** Seconds until the server adds the next percentage point. */
+  timeUntilNextPercent: number
+}
+
 export interface SubscriptionInfo {
   tier: 'paper' | 'tablet' | 'scroll' | 'opus'
   anlasFixed: number
   anlasPurchased: number
+  usage?: OpusUsageStatus
 }
 
 /** 캐릭터 카드 (단일 리스트 모델 — 카드가 직접 생성 포함 여부·위치를 가짐) */
@@ -381,7 +395,10 @@ export interface IpcInvokeMap {
   'nai:revealToken': { req: void; res: { token: string | null } }
   'nai:deleteToken': { req: void; res: void }
   /** 잔액 조회 (스냅샷 로그에도 기록) */
-  'nai:balance': { req: void; res: { anlas: number | null; tier: string | null } }
+  'nai:balance': {
+    req: void
+    res: { anlas: number | null; tier: string | null; usage?: OpusUsageStatus }
+  }
   'nai:anlasUsage': { req: void; res: { today: number; week: number } }
   'queue:enqueue': { req: { request: GenerationRequest; count: number }; res: { ids: string[] } }
   'queue:cancel': { req: { ids: string[] }; res: void }
@@ -446,6 +463,8 @@ export interface IpcInvokeMap {
   'images:showInFolder': { req: { filePath: string }; res: void }
   /** 다른 이름으로 저장 — 파일 저장 다이얼로그로 복사 */
   'images:saveAs': { req: { filePath: string }; res: { saved: boolean } }
+  /** 편집기(모자이크 등)의 결과 base64 PNG를 곧바로 원하는 위치에 저장 — 적용/저장 단계 없이 바로 내려받기 */
+  'images:saveBase64As': { req: { base64: string; defaultName?: string }; res: { saved: boolean } }
   /** 이미지를 클립보드로 복사 */
   'images:copy': { req: { filePath: string }; res: { copied: boolean } }
   /** 저장 폴더: 현재 경로 조회 / 폴더 선택 / 기본값으로 초기화 */
@@ -645,15 +664,20 @@ export interface IpcInvokeMap {
   'library:stackDelete': { req: { id: number }; res: void }
   /** 이미지들을 스택에 넣기/빼기 (stackId null = 해제) */
   'library:stackSet': { req: { imageIds: number[]; stackId: number | null }; res: void }
-  /** 선택 이미지 일괄 내보내기 — 폴더 선택 후 배치 순서대로 001, 002… 파일명으로 복사 */
-  'library:export': { req: { ids: number[] }; res: { count: number } }
+  /**
+   * 선택 이미지 일괄 내보내기 — 폴더 선택 후 배치 순서대로 001, 002… 파일명으로 복사.
+   * prefix가 있으면 "prefix_001"처럼 머리에 붙는다 (스택 안에서 내보낼 때 = 스택 이름)
+   */
+  'library:export': { req: { ids: number[]; prefix?: string }; res: { count: number } }
+  /** 스택 전체 내보내기 — 파일명 머리에 스택 이름을 붙여 다른 스택과 안 섞이게 */
+  'library:exportStack': { req: { id: number }; res: { count: number } }
 }
 
 /** 메인 → 렌더러 이벤트 채널 */
 export interface IpcEventMap {
   'queue:changed': QueueStatus
   /** 생성 완료 등으로 잔액이 갱신될 때 */
-  'anlas:balance': { anlas: number }
+  'anlas:balance': { anlas: number; usage?: OpusUsageStatus }
   'generation:progress': {
     id: string
     stepIx: number

@@ -1,5 +1,11 @@
 import { create } from 'zustand'
-import type { GenerationRequest, HistoryItem, PromptParts, QueueStatus } from '@shared/types'
+import type {
+  GenerationRequest,
+  HistoryItem,
+  OpusUsageStatus,
+  PromptParts,
+  QueueStatus
+} from '@shared/types'
 import { queueDoneAlert } from '../lib/completion-alert'
 import { enabledCharacters } from './characters-store'
 import { useVibesStore } from './refs-store'
@@ -14,11 +20,11 @@ import { toast } from './toast-store'
 export const DEFAULT_REQUEST: GenerationRequest = {
   prompt: '',
   negativePrompt: '',
-  model: 'nai-diffusion-4-5-full',
+  model: 'nai-diffusion-5-curated',
   width: 832,
   height: 1216,
-  steps: 28,
-  cfgScale: 5,
+  steps: 23,
+  cfgScale: 7,
   cfgRescale: 0,
   sampler: 'k_euler_ancestral',
   noiseSchedule: 'karras',
@@ -49,6 +55,7 @@ interface GenerationState {
   subscriptionTier: string | null
   setSubscriptionTier: (tier: string) => void
   anlasBalance: number | null
+  opusUsage: OpusUsageStatus | null
   refreshAnlas: () => Promise<void>
   queue: QueueStatus | null
   /** 진행 중 미리보기 (data URL 아님, base64) */
@@ -81,10 +88,20 @@ interface GenerationState {
     source: { imageBase64: string; maskBase64?: string; width: number; height: number } | null
   ) => void
   /** 인페인트 마스크 에디터 대상 (전역 — 어디서든 우클릭으로 열 수 있게). null=닫힘 */
-  inpaintTarget: { base64: string; width: number; height: number } | null
+  inpaintTarget: {
+    base64: string
+    width: number
+    height: number
+    /** 이어서 편집할 기존 마스크 (재편집일 때만) */
+    initialMask?: string
+    /** 재편집 — 이미 맞춰둔 strength/noise를 인페인트 기본값으로 덮지 않는다 */
+    keepParams?: boolean
+  } | null
   startInpaintFromPath: (filePath: string) => Promise<void>
   /** base64 이미지로 바로 인페인트 시작 (디렉터 등 파일 경로가 없는 소스용) */
   startInpaintFromImage: (base64: string, width: number, height: number) => void
+  /** 현재 소스의 마스크를 다시 편집 (i2i 소스면 마스크를 새로 그려 인페인트로 전환) */
+  editSourceMask: () => void
   confirmInpaint: (maskBase64: string) => void
   cancelInpaint: () => void
 }
@@ -100,10 +117,14 @@ export const useGenerationStore = create<GenerationState>((set, get) => ({
     void window.nais.invoke('settings:set', { key: 'nai_tier', value: tier })
   },
   anlasBalance: null,
+  opusUsage: null,
   refreshAnlas: async () => {
     // 잔액과 함께 구독 tier도 갱신 (무료 판정이 최신 tier를 쓰도록)
-    const { anlas, tier } = await window.nais.invoke('nai:balance', undefined)
-    set({ anlasBalance: anlas })
+    const { anlas, tier, usage } = await window.nais.invoke('nai:balance', undefined)
+    set({
+      anlasBalance: anlas,
+      opusUsage: usage ?? null
+    })
     if (tier) {
       set({ subscriptionTier: tier })
       void window.nais.invoke('settings:set', { key: 'nai_tier', value: tier })
@@ -204,8 +225,8 @@ export const useGenerationStore = create<GenerationState>((set, get) => ({
         ? {
             imageBase64: src.imageBase64,
             maskBase64: src.maskBase64,
-            // i2i 기본 strength/noise (파라미터 다이얼로그에서 조정 예정)
-            strength: request.i2iStrength ?? 0.7,
+            // 공식 웹 기본값: i2i 0.7, 인페인트 1.0
+            strength: request.i2iStrength ?? (src.maskBase64 ? 1 : 0.7),
             noise: request.i2iNoise ?? 0
           }
         : undefined,
@@ -263,12 +284,27 @@ export const useGenerationStore = create<GenerationState>((set, get) => ({
   },
   startInpaintFromImage: (base64, width, height) =>
     set({ inpaintTarget: { base64, width, height } }),
+  editSourceMask: () => {
+    const s = get().source
+    if (!s) return
+    set({
+      inpaintTarget: {
+        base64: s.imageBase64,
+        width: s.width,
+        height: s.height,
+        initialMask: s.maskBase64,
+        // 이미 인페인트면 맞춰둔 strength/noise 유지. i2i→인페인트 전환은 인페인트 기본값(1.0/0)으로
+        keepParams: Boolean(s.maskBase64)
+      }
+    })
+  },
   confirmInpaint: (maskBase64) => {
     const t = get().inpaintTarget
     if (!t) return
-    // 인페인트 기본 strength 1.0 / noise 0 (NAI 웹)
+    // 인페인트 기본 strength 1.0 / noise 0 (NAI 웹). 재편집(keepParams)은 맞춰둔 값 유지
+    const request = t.keepParams ? get().request : { ...get().request, i2iStrength: 1, i2iNoise: 0 }
     set({
-      request: { ...get().request, i2iStrength: 1, i2iNoise: 0 },
+      request,
       source: { imageBase64: t.base64, maskBase64, width: t.width, height: t.height },
       inpaintTarget: null
     })
@@ -413,9 +449,17 @@ export function bindGenerationEvents(): () => void {
       ...(e.previewPng ? { previewPng: e.previewPng } : {})
     })
   })
-  const offAnlas = window.nais.on('anlas:balance', ({ anlas }) => {
-    useGenerationStore.setState({ anlasBalance: anlas })
+  const offAnlas = window.nais.on('anlas:balance', ({ anlas, usage }) => {
+    useGenerationStore.setState({
+      anlasBalance: anlas,
+      opusUsage: usage ?? null
+    })
   })
+  // The server's usage percentage recharges while idle. Refresh periodically so an
+  // exhausted allowance does not remain shown as paid until the next generation.
+  const usageRefreshTimer = setInterval(() => {
+    void useGenerationStore.getState().refreshAnlas()
+  }, 5 * 60 * 1000)
   // 바이브 인코딩 완료 시 목록 재로드 → 카드의 인코딩 표시 갱신
   const offVibes = window.nais.on('vibes:encoded', () => {
     void useVibesStore.getState().load()
@@ -424,6 +468,7 @@ export function bindGenerationEvents(): () => void {
     offQueue()
     offProgress()
     offAnlas()
+    clearInterval(usageRefreshTimer)
     offVibes()
   }
 }

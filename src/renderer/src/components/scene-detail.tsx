@@ -12,12 +12,14 @@ import { cn } from '../lib/utils'
 import { ImageContextMenu } from './image-context-menu'
 import { Lightbox } from './lightbox'
 import { PromptEditor } from './prompt-editor'
+import { ReserveCount } from './reserve-count'
 import { Button } from './ui/button'
 
 export function SceneDetail({ scene }: { scene: Scene }): React.JSX.Element {
   const select = useScenesStore((s) => s.select)
   const update = useScenesStore((s) => s.update)
   const adjustReserve = useScenesStore((s) => s.adjustReserve)
+  const setReserve = useScenesStore((s) => s.setReserve)
   const casts = useScenesStore((s) => s.casts)
   const activeCastId = useScenesStore((s) => s.activeCastId)
   const activeCast = casts.find((c) => c.id === activeCastId) ?? null
@@ -25,6 +27,10 @@ export function SceneDetail({ scene }: { scene: Scene }): React.JSX.Element {
   const activeGroupId = useScenesStore((s) => s.activeGroupId)
   const activeGroup = groups.find((g) => g.id === activeGroupId) ?? null
   const groupCastIds = activeGroup?.castIds.filter((id) => casts.some((c) => c.id === id)) ?? []
+  const groupReserveCounts = groupCastIds.map((id) => scene.reserves[id] ?? 0)
+  const groupEditValue = groupReserveCounts.every((count) => count === groupReserveCounts[0])
+    ? (groupReserveCounts[0] ?? 0)
+    : null
   const contextReserveCount = activeGroup
     ? groupCastIds.reduce((sum, id) => sum + (scene.reserves[id] ?? 0), 0)
     : (scene.reserves[activeCastId] ?? 0)
@@ -178,7 +184,9 @@ export function SceneDetail({ scene }: { scene: Scene }): React.JSX.Element {
           >
             <Minus size={14} />
           </button>
-          <span
+          <ReserveCount
+            value={contextReserveCount}
+            editValue={activeGroup ? groupEditValue : contextReserveCount}
             className={cn(
               'min-w-6 rounded-full px-1 text-center text-[13px] font-semibold',
               !activeCast && !activeGroup && contextReserveCount > 0 && 'bg-danger text-white',
@@ -191,14 +199,13 @@ export function SceneDetail({ scene }: { scene: Scene }): React.JSX.Element {
             }
             title={
               activeGroup
-                ? `"${activeGroup.name}" 그룹 예약 합계 (${groupCastIds.length}명)`
+                ? `"${activeGroup.name}" 그룹 예약 합계 ${contextReserveCount}장 (${groupCastIds.length}명, ${groupEditValue == null ? '출연별 수량 다름' : `각 ${groupEditValue}장`})`
                 : activeCast
                   ? `"${activeCast.name}" 출연 예약`
                   : '사이드바 설정 예약'
             }
-          >
-            {contextReserveCount}
-          </span>
+            onCommit={(n) => void setReserve(scene.id, n)}
+          />
           <button
             className="grid size-6 place-items-center rounded-full text-muted hover:bg-paper"
             onClick={() => void adjustReserve(scene.id, 1)}

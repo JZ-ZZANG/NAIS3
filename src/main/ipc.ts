@@ -111,6 +111,7 @@ import {
   deleteImages as deleteLibraryImages,
   deleteStack,
   exportImages as exportLibraryImages,
+  exportStack as exportLibraryStack,
   importBase64 as importLibraryBase64,
   importPaths as importLibraryPaths,
   importViaDialog,
@@ -187,9 +188,9 @@ export function registerIpcHandlers(ctx: { dbVersion: number; queue: GenerationQ
   handle('nai:balance', async () => {
     const token = getNaiToken()
     if (!token) return { anlas: null, tier: null }
-    const { anlas, tier } = await fetchAnlasBalance(token)
+    const { anlas, tier, usage } = await fetchAnlasBalance(token)
     if (anlas !== null) logBalance(anlas)
-    return { anlas, tier }
+    return { anlas, tier, ...(usage ? { usage } : {}) }
   })
   handle('nai:anlasUsage', () => anlasUsage())
 
@@ -387,7 +388,10 @@ export function registerIpcHandlers(ctx: { dbVersion: number; queue: GenerationQ
   handle('library:stackSet', ({ imageIds, stackId }) => {
     setStack(imageIds, stackId)
   })
-  handle('library:export', async ({ ids }) => ({ count: await exportLibraryImages(ids) }))
+  handle('library:export', async ({ ids, prefix }) => ({
+    count: await exportLibraryImages(ids, prefix)
+  }))
+  handle('library:exportStack', async ({ id }) => ({ count: await exportLibraryStack(id) }))
 
   handle('scenes:exportJson', async ({ presetId }) => ({ saved: await exportScenesJson(presetId) }))
   handle('scenes:importJson', async ({ presetId }) => ({ count: await importScenesJson(presetId) }))
@@ -488,6 +492,18 @@ export function registerIpcHandlers(ctx: { dbVersion: number; queue: GenerationQ
     if (result.canceled || !result.filePath) return { saved: false }
     if (memBuf) writeFileSync(result.filePath, memBuf)
     else copyFileSync(filePath, result.filePath)
+    return { saved: true }
+  })
+
+  handle('images:saveBase64As', async ({ base64, defaultName }) => {
+    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+    const result = await dialog.showSaveDialog(win, {
+      title: '이미지 저장',
+      defaultPath: defaultName ?? `NAIS3_${Date.now()}.png`,
+      filters: [{ name: 'PNG', extensions: ['png'] }]
+    })
+    if (result.canceled || !result.filePath) return { saved: false }
+    writeFileSync(result.filePath, Buffer.from(base64.replace(/^data:[^,]+,/, ''), 'base64'))
     return { saved: true }
   })
 

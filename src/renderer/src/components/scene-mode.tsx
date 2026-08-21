@@ -42,6 +42,7 @@ import { useResolutionsStore } from '../stores/resolutions-store'
 import { askConfirm, askText } from '../stores/dialog-store'
 import { toast } from '../stores/toast-store'
 import { cn } from '../lib/utils'
+import { ReserveCount } from './reserve-count'
 import { SceneCastDialog } from './scene-cast-dialog'
 import { SceneAdditionDialog } from './scene-addition-dialog'
 import { SceneDetail } from './scene-detail'
@@ -761,6 +762,7 @@ const SceneCard = memo(function SceneCard({
   const duplicate = useScenesStore((s) => s.duplicate)
   const remove = useScenesStore((s) => s.remove)
   const adjustReserve = useScenesStore((s) => s.adjustReserve)
+  const setReserve = useScenesStore((s) => s.setReserve)
   const casts = useScenesStore((s) => s.casts)
   const activeCastId = useScenesStore((s) => s.activeCastId)
   const groups = useScenesStore((s) => s.groups)
@@ -774,6 +776,10 @@ const SceneCard = memo(function SceneCard({
   const activeCast = casts.find((c) => c.id === activeCastId) ?? null
   const activeGroup = groups.find((g) => g.id === activeGroupId) ?? null
   const groupCastIds = activeGroup?.castIds.filter((id) => casts.some((c) => c.id === id)) ?? []
+  const groupReserveCounts = groupCastIds.map((id) => scene.reserves[id] ?? 0)
+  const groupEditValue = groupReserveCounts.every((count) => count === groupReserveCounts[0])
+    ? (groupReserveCounts[0] ?? 0)
+    : null
   const ctxCount = activeGroup
     ? groupCastIds.reduce((sum, id) => sum + (scene.reserves[id] ?? 0), 0)
     : (scene.reserves[activeCastId] ?? 0)
@@ -975,7 +981,9 @@ const SceneCard = memo(function SceneCard({
                 >
                   <Minus size={13} />
                 </button>
-                <span
+                <ReserveCount
+                  value={ctxCount}
+                  editValue={activeGroup ? groupEditValue : ctxCount}
                   className={cn(
                     'min-w-5 rounded-full px-1 text-center text-[12px] font-medium text-white',
                     !activeCast && !activeGroup && ctxCount > 0 && 'bg-danger',
@@ -986,14 +994,13 @@ const SceneCard = memo(function SceneCard({
                   }
                   title={
                     activeGroup
-                      ? `"${activeGroup.name}" 그룹 예약 합계 (${groupCastIds.length}명)`
+                      ? `"${activeGroup.name}" 그룹 예약 합계 ${ctxCount}장 (${groupCastIds.length}명, ${groupEditValue == null ? '출연별 수량 다름' : `각 ${groupEditValue}장`})`
                       : activeCast
                         ? `"${activeCast.name}" 출연 예약`
                         : '사이드바 설정 예약'
                   }
-                >
-                  {ctxCount}
-                </span>
+                  onCommit={(n) => void setReserve(scene.id, n)}
+                />
                 <button
                   className="grid size-5 place-items-center rounded-full text-white hover:bg-white/20"
                   onClick={() => void adjustReserve(scene.id, 1)}
