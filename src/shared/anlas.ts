@@ -1,7 +1,16 @@
 import type { DirectorMethod, OpusUsageStatus } from './types'
 
 export function displayOpusUsagePercent(usage: OpusUsageStatus): number {
-  return usage.isNegative ? 0 : Math.max(0, Math.min(100, usage.percent))
+  return usage.isNegative ? 0 : Math.max(0, usage.percent)
+}
+
+export function opusUsagePercentSegments(usage: OpusUsageStatus): number[] {
+  const percent = displayOpusUsagePercent(usage)
+  const fullSegments = Math.floor(percent / 100)
+  const remainder = percent % 100
+
+  if (fullSegments === 0) return [remainder]
+  return [...Array.from({ length: fullSegments }, () => 100), ...(remainder > 0 ? [remainder] : [])]
 }
 
 /**
@@ -131,7 +140,10 @@ export function directorAugmentCost(
   return method === 'bg-removal' ? estimate.perImage * 3 + 5 : estimate.generation
 }
 
-function normalizeDirectorDimensions(width: number, height: number): { width: number; height: number } {
+function normalizeDirectorDimensions(
+  width: number,
+  height: number
+): { width: number; height: number } {
   if (width <= 0 || height <= 0) return { width: 0, height: 0 }
 
   let w = width

@@ -114,7 +114,7 @@ export interface QueueStatus {
 }
 
 export interface OpusUsageStatus {
-  /** Remaining rechargeable allowance, 0-100. */
+  /** Remaining rechargeable allowance percentage. May exceed 100 during boosts. */
   percent: number
   /** True once the allowance is exhausted and V5 falls back to Anlas. */
   isNegative: boolean
@@ -126,6 +126,19 @@ export interface SubscriptionInfo {
   tier: 'paper' | 'tablet' | 'scroll' | 'opus'
   anlasFixed: number
   anlasPurchased: number
+  usage?: OpusUsageStatus
+}
+
+/** 렌더러에 노출되는 NAI 계정 메타. 실제 토큰은 명시적으로 공개할 때만 전달한다. */
+export interface NaiAccountInfo {
+  id: string
+  label: string
+  prefix: string
+  suffix: string
+  length: number
+  active: boolean
+  tier: SubscriptionInfo['tier'] | null
+  anlas: number | null
   usage?: OpusUsageStatus
 }
 
@@ -394,10 +407,36 @@ export interface IpcInvokeMap {
   'nai:tokenStatus': { req: void; res: { hasToken: boolean; prefix: string; length: number } }
   'nai:revealToken': { req: void; res: { token: string | null } }
   'nai:deleteToken': { req: void; res: void }
+  /** 암호화 저장된 NAI 계정 목록과 각 계정의 현재 구독 상태 */
+  'nai:listAccounts': { req: void; res: { accounts: NaiAccountInfo[]; activeId: string | null } }
+  'nai:addAccount': {
+    req: { token: string; label?: string }
+    res: {
+      valid: boolean
+      accountId?: string
+      subscription?: SubscriptionInfo
+      error?: string
+    }
+  }
+  'nai:setActiveAccount': {
+    req: { id: string }
+    res: {
+      active: boolean
+      anlas: number | null
+      tier: SubscriptionInfo['tier'] | null
+      usage?: OpusUsageStatus
+    }
+  }
+  'nai:revealAccountToken': { req: { id: string }; res: { token: string | null } }
+  'nai:deleteAccount': { req: { id: string }; res: { activeId: string | null } }
   /** 잔액 조회 (스냅샷 로그에도 기록) */
   'nai:balance': {
     req: void
-    res: { anlas: number | null; tier: string | null; usage?: OpusUsageStatus }
+    res: {
+      anlas: number | null
+      tier: SubscriptionInfo['tier'] | null
+      usage?: OpusUsageStatus
+    }
   }
   'nai:anlasUsage': { req: void; res: { today: number; week: number } }
   'queue:enqueue': { req: { request: GenerationRequest; count: number }; res: { ids: string[] } }
@@ -677,7 +716,17 @@ export interface IpcInvokeMap {
 export interface IpcEventMap {
   'queue:changed': QueueStatus
   /** 생성 완료 등으로 잔액이 갱신될 때 */
-  'anlas:balance': { anlas: number; usage?: OpusUsageStatus }
+  'anlas:balance': {
+    anlas: number
+    tier?: SubscriptionInfo['tier'] | null
+    usage?: OpusUsageStatus
+  }
+  /** 수동 선택 또는 V5 게이지 소진으로 활성 계정이 바뀜 */
+  'nai:accountChanged': {
+    accountId: string | null
+    reason: 'added' | 'selected' | 'rotation' | 'deleted'
+    label?: string
+  }
   'generation:progress': {
     id: string
     stepIx: number
