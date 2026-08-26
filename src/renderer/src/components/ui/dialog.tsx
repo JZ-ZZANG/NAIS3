@@ -8,6 +8,11 @@ export const Dialog = DialogPrimitive.Root
 export const DialogTrigger = DialogPrimitive.Trigger
 export const DialogClose = DialogPrimitive.Close
 
+type DialogContentProps = ComponentProps<typeof DialogPrimitive.Content> & {
+  /** 제어형 다이얼로그가 사용하는 명시적인 닫기 콜백 */
+  onCloseClick?: () => void
+}
+
 function hasOpenNestedPopup(): boolean {
   return Boolean(
     hasActiveSelectPopup() ||
@@ -29,8 +34,9 @@ function isNestedPopupInteraction(target: HTMLElement | null): boolean {
 export function DialogContent({
   className,
   children,
+  onCloseClick,
   ...props
-}: ComponentProps<typeof DialogPrimitive.Content>) {
+}: DialogContentProps): React.JSX.Element {
   return (
     <DialogPrimitive.Portal>
       <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm" />
@@ -69,8 +75,10 @@ export function DialogContent({
       >
         {children}
         <DialogPrimitive.Close
+          type="button"
           aria-label="Close"
           className="absolute right-2.5 top-2.5 z-10 grid size-7 place-items-center rounded-md bg-surface/90 text-muted transition-colors hover:bg-surface-2 hover:text-ink"
+          onClick={onCloseClick}
         >
           <X size={16} />
         </DialogPrimitive.Close>
@@ -82,7 +90,7 @@ export function DialogContent({
 export function DialogTitle({
   className,
   ...props
-}: ComponentProps<typeof DialogPrimitive.Title>) {
+}: ComponentProps<typeof DialogPrimitive.Title>): React.JSX.Element {
   return (
     <DialogPrimitive.Title className={cn('text-[15px] font-semibold text-ink', className)} {...props} />
   )
@@ -91,7 +99,7 @@ export function DialogTitle({
 export function DialogDescription({
   className,
   ...props
-}: ComponentProps<typeof DialogPrimitive.Description>) {
+}: ComponentProps<typeof DialogPrimitive.Description>): React.JSX.Element {
   return (
     <DialogPrimitive.Description className={cn('text-[12px] text-muted', className)} {...props} />
   )

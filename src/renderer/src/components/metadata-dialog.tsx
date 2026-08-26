@@ -45,9 +45,12 @@ export function MetadataDialog(): React.JSX.Element {
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && close()}>
-      {/* max-h + 내부 스크롤 — 작은 창에서 다이얼로그가 화면을 넘어 버튼이 가려지는 것 방지 */}
-      <DialogContent className="flex max-h-[85vh] max-w-[760px] flex-col p-0">
-        <DialogTitle className="border-b border-line px-5 py-3.5 text-[15px]">
+      {/* 본문만 스크롤하고 헤더/버튼은 고정 — 작은 창에서도 요소가 겹치지 않게 */}
+      <DialogContent
+        className="flex max-h-[85vh] max-w-[760px] flex-col p-0"
+        onCloseClick={close}
+      >
+        <DialogTitle className="shrink-0 border-b border-line px-5 py-3.5 text-[15px]">
           이미지 메타데이터{' '}
           <span className="text-[12px] font-normal text-faint">— 체크한 항목만 적용</span>
         </DialogTitle>
@@ -62,9 +65,9 @@ export function MetadataDialog(): React.JSX.Element {
             <p className="text-[13px]">{error}</p>
           </div>
         ) : meta ? (
-          <div className="flex min-h-0 flex-1 gap-4 overflow-y-auto p-5">
+          <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-5 sm:flex-row">
             {/* 좌: 이미지(상) + 파라미터(하) */}
-            <div className="flex w-[46%] shrink-0 flex-col gap-3">
+            <div className="flex w-full shrink-0 flex-col gap-3 sm:w-[46%]">
               <div className="flex items-center justify-center overflow-hidden rounded-lg border border-line bg-surface-2/40">
                 {imageSrc ? (
                   <img src={imageSrc} className="max-h-[240px] w-full object-contain" alt="" />
@@ -138,7 +141,7 @@ export function MetadataDialog(): React.JSX.Element {
             </div>
 
             {/* 우: 프롬프트 */}
-            <div className="flex min-w-0 flex-1 flex-col gap-3 self-stretch">
+            <div className="flex min-w-0 flex-1 flex-col gap-3">
               {isSplitMeta(meta) ? (
                 <SplitPreview meta={meta} sel={sel} toggle={toggle} />
               ) : (
@@ -200,7 +203,7 @@ export function MetadataDialog(): React.JSX.Element {
           </div>
         ) : null}
 
-        <div className="flex justify-end gap-2 border-t border-line px-5 py-3">
+        <div className="flex shrink-0 justify-end gap-2 border-t border-line px-5 py-3">
           <Button variant="ghost" onClick={close}>
             닫기
           </Button>
@@ -224,11 +227,11 @@ function SplitPreview({
 }): React.JSX.Element {
   const parts = meta.promptParts
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="flex flex-col">
       <div className="mb-1">
         <CheckLabel checked={sel.prompt} onClick={() => toggle('prompt')} label="프롬프트 3분할" />
       </div>
-      <div className={cn('flex min-h-0 flex-1 flex-col gap-1.5', !sel.prompt && 'opacity-40')}>
+      <div className={cn('flex flex-col gap-1.5', !sel.prompt && 'opacity-40')}>
         <Part label="고정" value={parts?.base ?? ''} />
         <Part label="가변" value={parts?.additional ?? ''} />
         <Part label="디테일" value={parts?.detail ?? ''} />
@@ -239,12 +242,15 @@ function SplitPreview({
 
 function Part({ label, value }: { label: string; value: string }): React.JSX.Element {
   return (
-    <div className="flex min-h-0 flex-1 flex-col rounded-md border border-line bg-surface-2/40 p-2">
+    <div className="flex flex-col rounded-md border border-line bg-surface-2/40 p-2">
       <div className="mb-1 flex items-center justify-between gap-2">
         <p className="text-[10.5px] font-medium text-faint">{label}</p>
         <CopyButton value={value} label={`${label} 복사`} />
       </div>
-      <ReadonlyPrompt value={value} className="min-h-24 flex-1 text-[12px]" />
+      <ReadonlyPrompt
+        value={value}
+        className="min-h-12 max-h-24 [field-sizing:content] text-[12px]"
+      />
     </div>
   )
 }
@@ -293,7 +299,7 @@ function Field({
   grow?: boolean
 }): React.JSX.Element {
   return (
-    <div className={grow ? 'flex min-h-0 flex-1 flex-col' : 'flex flex-none flex-col'}>
+    <div className="flex flex-none flex-col">
       <div className="mb-1">
         <div className="flex items-center justify-between gap-2">
           <CheckLabel checked={sel[k]} onClick={() => toggle(k)} label={label} />
@@ -304,7 +310,9 @@ function Field({
         value={value}
         className={cn(
           'rounded-md border border-line bg-surface-2/40 p-2 text-[12.5px]',
-          grow ? 'min-h-[180px] flex-1' : 'h-36',
+          grow
+            ? 'min-h-24 max-h-48 [field-sizing:content]'
+            : 'min-h-16 max-h-36 [field-sizing:content]',
           !sel[k] && 'opacity-40'
         )}
       />

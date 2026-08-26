@@ -359,6 +359,8 @@ export interface Scene {
   imageCount: number
   /** 즐겨찾기 보유 여부 — 카드 낙관적 썸네일 교체 억제용 (즐겨찾기가 썸네일 고정) */
   hasFavorite: boolean
+  /** 씬별 캐릭터/레퍼런스/바이브 추가 설정 보유 여부 — 카드 아이콘 표시용 */
+  hasAddition: boolean
 }
 
 /** 씬 상세의 생성 이미지 (페이지네이션 단위) */

@@ -768,7 +768,9 @@ const SceneCard = memo(function SceneCard({
   const groups = useScenesStore((s) => s.groups)
   const activeGroupId = useScenesStore((s) => s.activeGroupId)
   const additionsEnabled = useScenesStore((s) => s.additionsEnabled)
-  const addition = useScenesStore((s) => s.additions[scene.id])
+  const cachedAddition = useScenesStore((s) => s.additions[scene.id])
+  const hasAddition =
+    cachedAddition === undefined ? scene.hasAddition : cachedAddition !== null
   const sortable = useSortable({ id: `scene-${scene.id}` })
   const [additionOpen, setAdditionOpen] = useState(false)
 
@@ -966,7 +968,7 @@ const SceneCard = memo(function SceneCard({
                   <button
                     className={cn(
                       'grid size-5 place-items-center rounded-full text-white hover:bg-white/20',
-                      addition && 'bg-accent'
+                      hasAddition && 'bg-accent'
                     )}
                     onClick={() => setAdditionOpen(true)}
                     title="씬별 캐릭터 추가"

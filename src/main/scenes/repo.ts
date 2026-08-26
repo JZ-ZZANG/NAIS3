@@ -54,6 +54,7 @@ function toScene(
     thumb?: Buffer | null
     thumb_path?: string | null
     has_favorite?: number
+    has_addition?: number
   }
 ): Scene {
   return {
@@ -69,7 +70,8 @@ function toScene(
     thumbnail: r.thumb ? r.thumb.toString('base64') : '',
     thumbnailPath: r.thumb_path ?? '',
     imageCount: r.image_count,
-    hasFavorite: r.has_favorite === 1
+    hasFavorite: r.has_favorite === 1,
+    hasAddition: r.has_addition === 1
   }
 }
 
@@ -141,7 +143,8 @@ export function listScenes(presetId: number): Scene[] {
               (SELECT COUNT(*) FROM images WHERE scene_id = s.id) AS image_count,
               (SELECT thumbnail FROM images WHERE scene_id = s.id ORDER BY favorite DESC, id DESC LIMIT 1) AS thumb,
               (SELECT file_path FROM images WHERE scene_id = s.id ORDER BY favorite DESC, id DESC LIMIT 1) AS thumb_path,
-              EXISTS(SELECT 1 FROM images WHERE scene_id = s.id AND favorite = 1) AS has_favorite
+              EXISTS(SELECT 1 FROM images WHERE scene_id = s.id AND favorite = 1) AS has_favorite,
+              EXISTS(SELECT 1 FROM scene_character_additions WHERE scene_id = s.id) AS has_addition
        FROM gen_scenes s WHERE s.preset_id = ? ORDER BY s.sort_order, s.id`
     )
     .all(presetId) as (Row & {
@@ -149,6 +152,7 @@ export function listScenes(presetId: number): Scene[] {
     thumb: Buffer | null
     thumb_path: string | null
     has_favorite: number
+    has_addition: number
   })[]
   return rows.map(toScene)
 }
