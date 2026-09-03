@@ -229,6 +229,32 @@ describe('payload builder', () => {
     expect(v4.caption.char_captions[0].centers[0]).toEqual({ x: 0.5, y: 0.5 })
   })
 
+  it('모델별 캐릭터 좌표 정밀도를 payload에도 적용한다', () => {
+    const characterPrompts = [
+      {
+        prompt: 'girl',
+        negativePrompt: '',
+        center: { x: 0.3476, y: 0.612 },
+        enabled: true
+      }
+    ]
+    const centerOf = (model: string): { x: number; y: number } => {
+      const payload = buildGenerateImagePayload({
+        ...baseRequest,
+        model,
+        useCoords: true,
+        characterPrompts
+      })
+      const prompt = payload.parameters.v4_prompt as {
+        caption: { char_captions: { centers: { x: number; y: number }[] }[] }
+      }
+      return prompt.caption.char_captions[0].centers[0]
+    }
+
+    expect(centerOf('nai-diffusion-5-full')).toEqual({ x: 0.348, y: 0.612 })
+    expect(centerOf('nai-diffusion-4-5-full')).toEqual({ x: 0.3, y: 0.7 })
+  })
+
   it('퀄리티 태그는 프롬프트 뒤에 그대로 이어 붙는다 (실캡처: ",,"이 생겨도 그대로)', () => {
     const p = buildGenerateImagePayload({
       ...baseRequest,

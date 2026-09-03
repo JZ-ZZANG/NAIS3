@@ -36,7 +36,7 @@ import {
   UC_PRESET_HINT,
   removeComments
 } from '../../shared/nai-presets'
-import { isV5Model, modelCapabilities } from '../../shared/nai-models'
+import { characterCenterForModel, isV5Model, modelCapabilities } from '../../shared/nai-models'
 
 /**
  * Variety+(skip_cfg_above_sigma) 값.
@@ -161,7 +161,9 @@ export function buildGenerateImagePayload(
     .filter((c) => c.enabled && c.prompt.trim())
     .slice(0, capabilities.maxCharacters)
   const center = (c: (typeof activeChars)[number]): { x: number; y: number } =>
-    req.useCoords ? (c.center ?? { x: 0.5, y: 0.5 }) : { x: 0.5, y: 0.5 }
+    req.useCoords
+      ? characterCenterForModel(req.model, c.center ?? { x: 0.5, y: 0.5 })
+      : { x: 0.5, y: 0.5 }
 
   return {
     action: opts.i2i ? (opts.i2i.maskBase64 ? 'infill' : 'img2img') : 'generate',

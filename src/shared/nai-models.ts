@@ -1,8 +1,27 @@
 export const NAI_V5_CURATED = 'nai-diffusion-5-curated'
 export const NAI_V5_FULL = 'nai-diffusion-5-full'
+export const LEGACY_CHARACTER_POSITION_GRID = [0.1, 0.3, 0.5, 0.7, 0.9] as const
 
 export function isV5Model(model: string): boolean {
   return model.startsWith('nai-diffusion-5-')
+}
+
+/** 모델이 실제로 지원하는 정밀도로 캐릭터 위치를 정규화한다. */
+export function characterCenterForModel(
+  model: string,
+  center: { x: number; y: number }
+): { x: number; y: number } {
+  if (isV5Model(model)) {
+    const round = (value: number): number =>
+      Math.round(Math.max(0, Math.min(1, value)) * 1000) / 1000
+    return { x: round(center.x), y: round(center.y) }
+  }
+
+  const nearest = (value: number): number =>
+    LEGACY_CHARACTER_POSITION_GRID.reduce((best, candidate) =>
+      Math.abs(candidate - value) < Math.abs(best - value) ? candidate : best
+    )
+  return { x: nearest(center.x), y: nearest(center.y) }
 }
 
 export function isV5FullModel(model: string): boolean {

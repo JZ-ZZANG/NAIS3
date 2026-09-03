@@ -16,7 +16,13 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { CharacterCard } from '@shared/types'
-import { canEnableAnotherCharacter, isV5Model, modelCapabilities } from '@shared/nai-models'
+import {
+  canEnableAnotherCharacter,
+  characterCenterForModel,
+  isV5Model,
+  LEGACY_CHARACTER_POSITION_GRID,
+  modelCapabilities
+} from '@shared/nai-models'
 import { cn } from '../lib/utils'
 import { useT } from '../lib/i18n'
 import { applyClickSelection, useSelectAllShortcut } from '../lib/edit-selection'
@@ -33,9 +39,6 @@ import { Input } from './ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
 import { Switch } from './ui/switch'
 
-/** NAI 웹의 5×5 수동 배치 그리드 (실캡처: 0.1~0.9) */
-const GRID = [0.1, 0.3, 0.5, 0.7, 0.9]
-
 function PositionPicker({
   center,
   onPick
@@ -45,8 +48,8 @@ function PositionPicker({
 }): React.JSX.Element {
   return (
     <div className="grid grid-cols-5 gap-0.5">
-      {GRID.map((y) =>
-        GRID.map((x) => (
+      {LEGACY_CHARACTER_POSITION_GRID.map((y) =>
+        LEGACY_CHARACTER_POSITION_GRID.map((x) => (
           <button
             key={`${x}-${y}`}
             className={cn(
@@ -59,6 +62,86 @@ function PositionPicker({
         ))
       )}
     </div>
+  )
+}
+
+/** V5의 연속 좌표 선택기. 기존 5×5 그리드와 같은 128×128px을 사용한다. */
+function V5PositionPicker({
+  center,
+  onPick
+}: {
+  center: { x: number; y: number }
+  onPick: (center: { x: number; y: number }) => void
+}): React.JSX.Element {
+  const [draft, setDraft] = useState(center)
+  const draggingRef = useRef(false)
+
+  const positionFromPointer = (
+    event: React.PointerEvent<HTMLButtonElement>
+  ): { x: number; y: number } => {
+    const rect = event.currentTarget.getBoundingClientRect()
+    const round = (value: number): number =>
+      Math.round(Math.max(0, Math.min(1, value)) * 1000) / 1000
+    return {
+      x: round((event.clientX - rect.left) / rect.width),
+      y: round((event.clientY - rect.top) / rect.height)
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      className="relative block h-32 w-32 touch-none overflow-hidden rounded-[4px] border border-line bg-paper cursor-crosshair"
+      title={`(${draft.x.toFixed(3)}, ${draft.y.toFixed(3)})`}
+      onPointerDown={(event) => {
+        event.preventDefault()
+        draggingRef.current = true
+        event.currentTarget.setPointerCapture(event.pointerId)
+        setDraft(positionFromPointer(event))
+      }}
+      onPointerMove={(event) => {
+        if (!draggingRef.current) return
+        setDraft(positionFromPointer(event))
+      }}
+      onPointerUp={(event) => {
+        if (!draggingRef.current) return
+        const next = positionFromPointer(event)
+        draggingRef.current = false
+        setDraft(next)
+        onPick(next)
+      }}
+      onPointerCancel={() => {
+        draggingRef.current = false
+        setDraft(center)
+      }}
+    >
+      {[20, 40, 60, 80].map((position) => (
+        <span
+          key={`guide-x-${position}`}
+          className="pointer-events-none absolute top-0 h-full w-px bg-line/50"
+          style={{ left: `${position}%` }}
+        />
+      ))}
+      {[20, 40, 60, 80].map((position) => (
+        <span
+          key={`guide-y-${position}`}
+          className="pointer-events-none absolute left-0 h-px w-full bg-line/50"
+          style={{ top: `${position}%` }}
+        />
+      ))}
+      <span
+        className="pointer-events-none absolute left-0 h-px w-full bg-accent/50"
+        style={{ top: `${draft.y * 100}%` }}
+      />
+      <span
+        className="pointer-events-none absolute top-0 h-full w-px bg-accent/50"
+        style={{ left: `${draft.x * 100}%` }}
+      />
+      <span
+        className="pointer-events-none absolute size-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-accent bg-paper"
+        style={{ left: `${draft.x * 100}%`, top: `${draft.y * 100}%` }}
+      />
+    </button>
   )
 }
 
@@ -219,58 +302,80 @@ export function CharacterOverlay(): React.JSX.Element {
     )
   }
 
-  const renderHeader = (char: CharacterCard): React.ReactNode => (
-    <div
-      data-char-card
-      className={cn('flex h-10 items-center gap-2 px-2', !char.enabled && 'opacity-55')}
-    >
-      <Switch
-        checked={char.enabled}
-        onCheckedChange={(v) => {
-          if (v && !canEnableAnotherCharacter(model, enabledCount)) return
-          updateCard(char.id, { enabled: v }, maxCharacters)
-        }}
-      />
-      {char.thumbnail ? (
-        <img
-          src={`data:image/webp;base64,${char.thumbnail}`}
-          className="size-8 shrink-0 rounded-md object-cover"
-          alt=""
-          onMouseEnter={(e) => showPreview(e, char.thumbnail)}
-          onMouseLeave={() => setHoverPreview(null)}
-        />
-      ) : (
-        <div className="grid size-8 shrink-0 place-items-center rounded-md bg-surface-2 text-faint">
-          <UserRound size={15} strokeWidth={1.5} />
-        </div>
-      )}
-      <button
-        className="min-w-0 flex-1 truncate text-left text-[13px] text-ink"
-        title={t('눌러서 수정')}
-        onClick={() => setExpandedId((prev) => (prev === char.id ? null : char.id))}
+  const renderHeader = (char: CharacterCard): React.ReactNode => {
+    const v5 = isV5Model(model)
+    const displayCenter = characterCenterForModel(model, char.center)
+    const coordinateText = v5
+      ? `${displayCenter.x.toFixed(3)},${displayCenter.y.toFixed(3)}`
+      : `${displayCenter.x.toFixed(1)},${displayCenter.y.toFixed(1)}`
+
+    return (
+      <div
+        data-char-card
+        className={cn('flex h-10 items-center gap-2 px-2', !char.enabled && 'opacity-55')}
       >
-        {char.name || char.prompt.slice(0, 40) || (
-          <span className="text-faint">{t('빈 캐릭터')}</span>
+        <Switch
+          checked={char.enabled}
+          onCheckedChange={(v) => {
+            if (v && !canEnableAnotherCharacter(model, enabledCount)) return
+            updateCard(char.id, { enabled: v }, maxCharacters)
+          }}
+        />
+        {char.thumbnail ? (
+          <img
+            src={`data:image/webp;base64,${char.thumbnail}`}
+            className="size-8 shrink-0 rounded-md object-cover"
+            alt=""
+            onMouseEnter={(e) => showPreview(e, char.thumbnail)}
+            onMouseLeave={() => setHoverPreview(null)}
+          />
+        ) : (
+          <div className="grid size-8 shrink-0 place-items-center rounded-md bg-surface-2 text-faint">
+            <UserRound size={15} strokeWidth={1.5} />
+          </div>
         )}
-      </button>
-      {useCoords && char.enabled && (
-        <Popover>
-          <PopoverTrigger asChild>
-            <Button size="sm" variant="ghost" className="h-7 gap-1 px-1.5 font-mono text-[11px]">
-              <Crosshair size={13} />
-              {char.center.x},{char.center.y}
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent className="w-auto">
-            <PositionPicker
-              center={char.center}
-              onPick={(c) => updateCard(char.id, { center: c })}
-            />
-          </PopoverContent>
-        </Popover>
-      )}
-    </div>
-  )
+        <button
+          className="min-w-0 flex-1 truncate text-left text-[13px] text-ink"
+          title={t('눌러서 수정')}
+          onClick={() => setExpandedId((prev) => (prev === char.id ? null : char.id))}
+        >
+          {char.name || char.prompt.slice(0, 40) || (
+            <span className="text-faint">{t('빈 캐릭터')}</span>
+          )}
+        </button>
+        {useCoords && char.enabled && (
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button
+                size="sm"
+                variant="ghost"
+                className={cn(
+                  'h-7 shrink-0 justify-start gap-1 px-1.5 font-mono text-[11px]',
+                  v5 ? 'w-[104px]' : 'w-20'
+                )}
+              >
+                <Crosshair size={13} />
+                {coordinateText}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto">
+              {v5 ? (
+                <V5PositionPicker
+                  center={displayCenter}
+                  onPick={(c) => updateCard(char.id, { center: c })}
+                />
+              ) : (
+                <PositionPicker
+                  center={displayCenter}
+                  onPick={(c) => updateCard(char.id, { center: c })}
+                />
+              )}
+            </PopoverContent>
+          </Popover>
+        )}
+      </div>
+    )
+  }
 
   const renderExpanded = (char: CharacterCard): React.ReactNode => (
     <div className="flex flex-col gap-1.5 px-2 pb-2">
@@ -474,8 +579,8 @@ export function CharacterOverlay(): React.JSX.Element {
           rows={rows}
           searching={searching}
           expandedId={editMode ? null : expandedId}
-          // 헤더가 item 밖 상태(좌표 토글/편집 선택)에 의존 — 바뀌면 카드 리렌더
-          renderKey={editMode ? selected : useCoords}
+          // 헤더가 item 밖 상태(좌표 토글/모델/편집 선택)에 의존 — 바뀌면 카드 리렌더
+          renderKey={editMode ? selected : `${useCoords}:${model}`}
           folderActions={{
             rename: renameFolder,
             toggleCollapse,

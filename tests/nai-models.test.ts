@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  characterCenterForModel,
   generationDefaultsForModel,
   canEnableAnotherCharacter,
   inpaintingModelFor,
@@ -54,5 +55,16 @@ describe('NAI 모델별 동작', () => {
     expect(inpaintingModelFor('nai-diffusion-5-curated')).toBe(
       'nai-diffusion-4-5-curated-inpainting'
     )
+  })
+
+  it('캐릭터 좌표는 V5에서 세 자리, V4.5에서 기존 5×5 값으로 정규화한다', () => {
+    expect(characterCenterForModel('nai-diffusion-5-full', { x: 0.3476, y: -0.2 })).toEqual({
+      x: 0.348,
+      y: 0
+    })
+    expect(characterCenterForModel('nai-diffusion-4-5-full', { x: 0.3476, y: 0.612 })).toEqual({
+      x: 0.3,
+      y: 0.7
+    })
   })
 })
