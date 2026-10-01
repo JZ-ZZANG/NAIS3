@@ -9,7 +9,11 @@ import JSZip from 'jszip'
 import { parse } from 'yaml'
 
 export function verifyVersion(version, tag) {
-  assert.match(version, /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/, 'Stable app version required')
+  assert.match(
+    version,
+    /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/,
+    'Valid semantic app version required'
+  )
   assert.equal(tag, `v${version}`, 'Release tag must match package.json version')
 }
 

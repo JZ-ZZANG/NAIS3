@@ -1,7 +1,9 @@
 # Release procedure
 
-Production releases use a stable version such as `1.0.26` in `package.json` and
-the matching tag `v1.0.26`. The Release workflow builds **drafts only**.
+Releases use a semantic version such as `1.0.26` or a prerelease version such as
+`1.0.26-c.1` in `package.json`, with the matching tag (`v1.0.26` or
+`v1.0.26-c.1`). Tags containing a prerelease suffix are marked as prereleases.
+The Release workflow builds **drafts only**.
 
 ## Prepare
 

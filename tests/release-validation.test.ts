@@ -59,11 +59,14 @@ afterEach(async () => {
 })
 
 describe('release validation gates', () => {
-  it('requires the exact stable version instead of allowing mismatched or prerelease tags', () => {
+  it('requires an exact stable or prerelease semantic version tag', () => {
     expect(() => verifyVersion(version, 'v1.0.26')).not.toThrow()
+    expect(() => verifyVersion('1.0.26-c.1', 'v1.0.26-c.1')).not.toThrow()
+    expect(() => verifyVersion('1.0.26-rc.1', 'v1.0.26-rc.1')).not.toThrow()
     expect(() => verifyVersion(version, 'v1.0.25')).toThrow()
     expect(() => verifyVersion(version, 'v1.0.26-rc.1')).toThrow()
-    expect(() => verifyVersion('1.0.26-rc.1', 'v1.0.26-rc.1')).toThrow()
+    expect(() => verifyVersion('1.0.26-c.01', 'v1.0.26-c.01')).toThrow()
+    expect(() => verifyVersion('1.0.26-', 'v1.0.26-')).toThrow()
   })
 
   it('accepts the complete seven-file release contract', async () => {
