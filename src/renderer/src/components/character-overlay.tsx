@@ -39,7 +39,7 @@ import { Input } from './ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
 import { Switch } from './ui/switch'
 
-function PositionPicker({
+export function PositionPicker({
   center,
   onPick
 }: {
@@ -66,7 +66,7 @@ function PositionPicker({
 }
 
 /** V5의 연속 좌표 선택기. 기존 5×5 그리드와 같은 128×128px을 사용한다. */
-function V5PositionPicker({
+export function V5PositionPicker({
   center,
   onPick
 }: {

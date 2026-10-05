@@ -29,6 +29,7 @@ import { useGenerationStore } from '../stores/generation-store'
 import { useLayoutStore } from '../stores/layout-store'
 import { useCharRefsStore, useVibesStore } from '../stores/refs-store'
 import { useScenesStore } from '../stores/scenes-store'
+import { useScenePlusStore } from '../stores/scene-plus-store'
 import { PromptEditor } from './prompt-editor'
 import { PromptPresetBar } from './prompt-preset-bar'
 import { CharacterOverlay } from './character-overlay'
@@ -87,7 +88,12 @@ export function PromptPanel(): React.JSX.Element {
   // 모든 프리셋의 예약 총합 — 씬 생성 버튼 한 번으로 전부 실행
   const sceneReserved = useScenesStore((s) => s.reservedTotal)
   const generateReserved = useScenesStore((s) => s.generateReserved)
-  const isScene = centerMode === 'scene'
+  const scenePlusReserved = useScenePlusStore((s) => s.reservedTotal)
+  const generateScenePlusReserved = useScenePlusStore((s) => s.generateReserved)
+  const isScene = centerMode === 'scene' || centerMode === 'scene-plus'
+  const activeSceneReserved = centerMode === 'scene-plus' ? scenePlusReserved : sceneReserved
+  const generateActiveScenes =
+    centerMode === 'scene-plus' ? generateScenePlusReserved : generateReserved
   // 프롬프트/네거티브 개별 접기 — 하나를 접으면 다른 하나가 넓어짐
   const [posCollapsed, setPosCollapsed] = useState(false)
   const [negCollapsed, setNegCollapsed] = useState(false)
@@ -432,18 +438,23 @@ export function PromptPanel(): React.JSX.Element {
             variant="accent"
             size="lg"
             className="flex-1 gap-2"
-            disabled={sceneReserved === 0}
+            disabled={activeSceneReserved === 0}
             title={
-              sceneReserved === 0
+              activeSceneReserved === 0
                 ? t('ui.queueScenesWithBeforeGenerating')
-                : t('ui.generateValueQueuedImagesAcrossAllPresetsInPresetOrder', sceneReserved)
+                : t(
+                    'ui.generateValueQueuedImagesAcrossAllPresetsInPresetOrder',
+                    activeSceneReserved
+                  )
             }
-            onClick={() => void generateReserved()}
+            onClick={() => void generateActiveScenes()}
           >
             {t('ui.generateScenes')}
-            {sceneReserved > 0 && (
+            {activeSceneReserved > 0 && (
               // 한글 '장'이 mono 폴백(Windows Consolas)에서 깨져 보여 기본 폰트(Pretendard) 사용
-              <span className="text-[12px] opacity-75">{t('ui.valueImages', sceneReserved)}</span>
+              <span className="text-[12px] opacity-75">
+                {t('ui.valueImages', activeSceneReserved)}
+              </span>
             )}
           </Button>
         ) : (

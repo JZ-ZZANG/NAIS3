@@ -16,6 +16,11 @@ const WORKSPACE_KEYS = [
   'promptPresets',
   'scenePresets',
   'scenes',
+  'scenePlusPresets',
+  'scenePlusScenes',
+  'scenePlusCasts',
+  'scenePlusCastGroups',
+  'scenePlusCastSettings',
   'images',
   'libraryImages',
   'libraryStacks'
@@ -50,14 +55,29 @@ export function importBrowserWorkspace(state: BrowserState, input: unknown): voi
     throw new Error('Invalid browser backup workspace')
   for (const key of WORKSPACE_KEYS) {
     if (key === 'nextId') continue
-    if (key === 'vibeEncodings') {
+    if (key === 'vibeEncodings' || key === 'scenePlusCastSettings') {
       if (!data[key] || typeof data[key] !== 'object' || Array.isArray(data[key]))
         throw new Error(`Invalid browser backup: ${key}`)
-    } else if (!Array.isArray(data[key])) throw new Error(`Invalid browser backup: ${key}`)
+    } else if (!Array.isArray(data[key])) {
+      // 씬+ 도입 전 version 1 백업은 해당 배열이 없다.
+      if (
+        key === 'scenePlusPresets' ||
+        key === 'scenePlusScenes' ||
+        key === 'scenePlusCasts' ||
+        key === 'scenePlusCastGroups'
+      )
+        continue
+      throw new Error(`Invalid browser backup: ${key}`)
+    }
   }
   if (!data.settings || typeof data.settings !== 'object' || Array.isArray(data.settings))
     throw new Error('Invalid browser backup settings')
-  const { workspace } = exportBrowserWorkspace(data)
+  const normalized = { ...state, ...data }
+  if (!Array.isArray(data.scenePlusPresets)) normalized.scenePlusPresets = state.scenePlusPresets
+  if (!Array.isArray(data.scenePlusScenes)) normalized.scenePlusScenes = []
+  if (!Array.isArray(data.scenePlusCasts)) normalized.scenePlusCasts = []
+  if (!Array.isArray(data.scenePlusCastGroups)) normalized.scenePlusCastGroups = []
+  const { workspace } = exportBrowserWorkspace(normalized)
   Object.assign(state, workspace, { settings: { ...state.settings, ...workspace.settings } })
 }
 

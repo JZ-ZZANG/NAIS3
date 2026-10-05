@@ -11,6 +11,7 @@ import { ArtistTagsDialog } from './components/artist-tags-dialog'
 import { MetadataDialog } from './components/metadata-dialog'
 import { PromptPanel } from './components/prompt-panel'
 import { SceneMode } from './components/scene-mode'
+import { ScenePlusMode } from './components/scene-plus-mode'
 import { Titlebar } from './components/titlebar'
 import { SettingsDialog } from './components/token-dialog'
 import { TextPromptHost } from './components/text-prompt-host'
@@ -21,6 +22,7 @@ import { useFragmentsStore } from './stores/fragments-store'
 import { useCharRefsStore, useVibesStore } from './stores/refs-store'
 import { bindGenerationEvents, useGenerationStore } from './stores/generation-store'
 import { bindSceneEvents } from './stores/scenes-store'
+import { bindScenePlusEvents } from './stores/scene-plus-store'
 import { bindShortcuts, useShortcutsStore } from './stores/shortcuts-store'
 import { bindUpdateEvents } from './stores/update-store'
 import { bindNavMouse } from './lib/nav-history'
@@ -74,6 +76,7 @@ export default function App(): React.JSX.Element {
     })()
     const unbindGen = bindGenerationEvents()
     const unbindScene = bindSceneEvents()
+    const unbindScenePlus = bindScenePlusEvents()
     const unbindKeys = bindShortcuts()
     const unbindUpdate = bindUpdateEvents()
     const unbindNav = bindNavMouse() // 마우스 4/5번 버튼 뒤로/앞으로
@@ -88,6 +91,7 @@ export default function App(): React.JSX.Element {
     return () => {
       unbindGen()
       unbindScene()
+      unbindScenePlus()
       unbindKeys()
       unbindUpdate()
       unbindNav()
@@ -127,6 +131,8 @@ export default function App(): React.JSX.Element {
           <main className="flex min-h-0 min-w-0 flex-1">
             {centerMode === 'scene' ? (
               <SceneMode />
+            ) : centerMode === 'scene-plus' ? (
+              <ScenePlusMode />
             ) : centerMode === 'director' ? (
               <DirectorMode />
             ) : centerMode === 'library' ? (

@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, readdirSync, renameSync, rmSync } from 'fs'
 import { join } from 'path'
 import { migrations } from './migrations'
 import { ensureSceneAdditionSchema, isLegacyCustomV17 } from './scene-addition-schema'
+import { ensureScenePlusSchema } from './scene-plus-schema'
 
 let db: Database.Database | null = null
 
@@ -66,6 +67,7 @@ export function initDb(): { version: number; path: string; isNewDatabase: boolea
   }
 
   ensureSceneAdditionSchema(db)
+  ensureScenePlusSchema(db)
 
   return { version: target, path, isNewDatabase }
 }

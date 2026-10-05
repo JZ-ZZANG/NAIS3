@@ -1,6 +1,7 @@
 import type { MessageCatalog } from './catalog-ko'
 
 export const EN = {
+  'ui.scenePlus': 'Scene+',
   'ui.decreaseBatchCount': 'Decrease batch count',
   'ui.batchCount': 'Batch count',
   'ui.increaseBatchCount': 'Increase batch count',
@@ -163,6 +164,7 @@ export const EN = {
   'ui.regularGenerationsAreSavedDirectlyIntoThisFolder':
     'Regular generations are saved directly into this folder',
   'ui.sceneSaveFolder': 'Scene Save Folder',
+  'ui.scenePlusSaveFolder': 'Scene+ Save Folder',
   'ui.organizedUnderThisFolderByPresetSceneName':
     'Organized under this folder by preset/scene name',
   'ui.dataBackup': 'Data Backup',
@@ -622,6 +624,7 @@ export const EN = {
   'ui.unknownBackupFormat': 'Unknown backup format',
   'ui.saveImage': 'Save Image',
   'ui.chooseSceneSaveFolder': 'Choose Scene Save Folder',
+  'ui.chooseScenePlusSaveFolder': 'Choose Scene+ Save Folder',
   'ui.chooseSaveFolder': 'Choose Save Folder',
   'ui.valueImagesDoneValueFailed': '{0} {0|image|images} done · {1} failed',
   'ui.valueImagesDone': '{0} {0|image|images} done',

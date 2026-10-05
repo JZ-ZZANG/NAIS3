@@ -176,6 +176,7 @@ function AppearanceSection(): React.JSX.Element {
 
 const TOGGLABLE_PAGES: { id: CenterMode; label: MessageId }[] = [
   { id: 'scene', label: 'ui.scene' },
+  { id: 'scene-plus', label: 'ui.scenePlus' },
   { id: 'director', label: 'ui.director' },
   { id: 'library', label: 'ui.library' },
   { id: 'websearch', label: 'ui.web' }
@@ -408,7 +409,7 @@ function SaveDirRow({
   label,
   hint
 }: {
-  target: 'main' | 'scene'
+  target: 'main' | 'scene' | 'scene-plus'
   label: string
   hint: string
 }): React.JSX.Element {
@@ -555,6 +556,11 @@ function StorageSection(): React.JSX.Element {
       <SaveDirRow
         target="scene"
         label={t('ui.sceneSaveFolder')}
+        hint={t('ui.organizedUnderThisFolderByPresetSceneName')}
+      />
+      <SaveDirRow
+        target="scene-plus"
+        label={t('ui.scenePlusSaveFolder')}
         hint={t('ui.organizedUnderThisFolderByPresetSceneName')}
       />
 

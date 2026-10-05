@@ -27,6 +27,7 @@ import { requestUsesV5Usage, resolveNaiAccountForGeneration } from './nai/accoun
 import { prepareCharRefs, prepareVibes } from './refs/prepare'
 import { GenerationQueue } from './queue/generation-queue'
 import { getPresetName, getScene } from './scenes/repo'
+import { getPlusPresetName, getPlusScene, linkPlusImage } from './scenes/plus-repo'
 
 // 앱 이름 (dev 메뉴바·dock에서 'Electron' 대신 표시). 패키징 앱은 productName 사용
 app.setName('NAIS3')
@@ -242,6 +243,7 @@ app.whenReady().then(() => {
         )
 
     const scene = request.sceneId ? getScene(request.sceneId) : null
+    const plusScene = request.scenePlusId ? getPlusScene(request.scenePlusId) : null
     const localMetadata = request.promptParts
       ? {
           promptParts: {
@@ -253,7 +255,7 @@ app.whenReady().then(() => {
 
     // 자동저장 OFF: 메인 생성은 파일로 저장하지 않는다 — 원본은 메모리(최근 20장)에만,
     // 히스토리에는 썸네일 행으로 남는다 (NAIS2 방식). 씬 생성은 항상 씬 폴더에 저장.
-    const ephemeral = !scene && getSetting('auto_save') === '0'
+    const ephemeral = !scene && !plusScene && getSetting('auto_save') === '0'
     const saved = ephemeral
       ? await saveEphemeralImage({
           png,
@@ -268,23 +270,33 @@ app.whenReady().then(() => {
           png,
           sentPayload,
           seed: request.seed,
-          kind: request.sceneId
-            ? 'scene'
-            : source
-              ? source.maskBase64
-                ? 'inpaint'
-                : 'i2i'
-              : 't2i',
+          kind:
+            request.sceneId || request.scenePlusId
+              ? 'scene'
+              : source
+                ? source.maskBase64
+                  ? 'inpaint'
+                  : 'i2i'
+                : 't2i',
           sceneId: request.sceneId,
+          scenePlusId: request.scenePlusId,
           format: imageFormat,
-          sceneName: scene?.name,
-          scenePresetName: scene ? (getPresetName(scene.presetId) ?? undefined) : undefined,
+          sceneName: scene?.name ?? plusScene?.name,
+          scenePresetName: scene
+            ? (getPresetName(scene.presetId) ?? undefined)
+            : plusScene
+              ? (getPlusPresetName(plusScene.presetId) ?? '기본')
+              : undefined,
           localMetadata
         })
 
     // 씬 생성이면 해당 씬 갱신 알림 (목록 썸네일/개수, 상세 이미지 갱신용)
     if (request.sceneId)
       broadcast('scenes:changed', { sceneId: request.sceneId, filePath: saved.filePath })
+    if (request.scenePlusId) {
+      linkPlusImage(saved.id, request.scenePlusId)
+      broadcast('scenePlus:changed', { sceneId: request.scenePlusId, filePath: saved.filePath })
+    }
 
     // 생성 후 잔액 갱신 (실사용량 추적의 진실 공급원) — 실패해도 생성 흐름엔 영향 없음
     void fetchAnlasBalance(token).then(({ anlas, tier, usage }) => {

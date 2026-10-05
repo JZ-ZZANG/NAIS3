@@ -39,6 +39,12 @@ export function scenesRoot(): string {
   return custom && custom.trim() ? custom : join(defaultImagesRoot(), 'NAIS3_scene')
 }
 
+/** 씬+ 저장 루트 — 씬 모드와 분리하며, 미지정 시 같은 기본 상위 폴더를 사용한다. */
+export function scenePlusRoot(): string {
+  const custom = getSetting('scene_plus_save_dir')
+  return custom && custom.trim() ? custom : join(defaultImagesRoot(), 'NAIS3_scene_plus')
+}
+
 /** 앱 내부 라이브러리 폴더 — 자동 저장 OFF일 때 저장 위치 (히스토리엔 남지만 저장 폴더엔 안 감) */
 export function libraryRoot(): string {
   return join(app.getPath('userData'), 'library')
@@ -46,8 +52,26 @@ export function libraryRoot(): string {
 
 /** 씬 이미지 폴더 경로 — 씬루트/<프리셋>/<씬 이름>/ (저장·폴더 열기 공용) */
 export function sceneDir(presetName: string | null, sceneName: string, sceneId?: number): string {
+  return sceneModeDir(scenesRoot(), presetName, sceneName, sceneId)
+}
+
+/** 씬+ 이미지 폴더 경로 — 씬+루트/<프리셋>/<씬 이름>/ */
+export function scenePlusDir(
+  presetName: string | null,
+  sceneName: string,
+  sceneId?: number
+): string {
+  return sceneModeDir(scenePlusRoot(), presetName, sceneName, sceneId)
+}
+
+function sceneModeDir(
+  root: string,
+  presetName: string | null,
+  sceneName: string,
+  sceneId?: number
+): string {
   const safe = (s: string): string => s.replace(/[/\\:*?"<>|]/g, '_').trim()
-  return join(scenesRoot(), safe(presetName ?? '') || '기본', safe(sceneName) || `씬-${sceneId}`)
+  return join(root, safe(presetName ?? '') || '기본', safe(sceneName) || `씬-${sceneId}`)
 }
 
 /**
@@ -64,6 +88,7 @@ export function isUnderImagesRoot(filePath: string): boolean {
   return (
     isInside(imagesRoot(), filePath) ||
     isInside(scenesRoot(), filePath) ||
+    isInside(scenePlusRoot(), filePath) ||
     isInside(defaultImagesRoot(), filePath) ||
     isInside(libraryRoot(), filePath)
   )
@@ -153,6 +178,8 @@ export async function saveGeneratedImage(input: {
   // 디렉터 결과는 개별 req_type(bg-removal 등)을 kind로 저장 → 히스토리 뱃지가 툴별로 표시
   kind: 't2i' | 'i2i' | 'inpaint' | 'scene' | 'upscale' | 'director' | 'mosaic' | DirectorMethod
   sceneId?: number
+  /** 씬+ 생성일 때의 ID. 존재하면 씬+ 전용 저장 루트를 사용한다. */
+  scenePlusId?: number
   /** 저장 파일 확장자 (NAI가 반환한 실제 포맷). 기본 png */
   format?: 'png' | 'webp'
   /** 씬 생성이면 씬 이름 — 씬루트/<프리셋>/<씬 이름>/ 아래에 저장 (NAIS2 구조와 동일 계층) */
@@ -169,7 +196,9 @@ export async function saveGeneratedImage(input: {
   //       씬 = 씬루트/<프리셋>/<씬 이름>/
   let monthDir: string
   if (input.sceneName) {
-    monthDir = sceneDir(input.scenePresetName ?? null, input.sceneName, input.sceneId)
+    monthDir = input.scenePlusId
+      ? scenePlusDir(input.scenePresetName ?? null, input.sceneName, input.scenePlusId)
+      : sceneDir(input.scenePresetName ?? null, input.sceneName, input.sceneId)
   } else {
     const out = imagesRoot()
     monthDir =

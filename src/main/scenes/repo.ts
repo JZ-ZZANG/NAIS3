@@ -573,7 +573,7 @@ export async function importScenesJson(presetId: number): Promise<number> {
 
 type ZipEntry = { file_path: string; name: string }
 
-async function zipFiles(entries: ZipEntry[], defaultName: string): Promise<number> {
+export async function zipFiles(entries: ZipEntry[], defaultName: string): Promise<number> {
   if (entries.length === 0) return 0
   const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
   const result = await dialog.showSaveDialog(win, {

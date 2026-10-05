@@ -11,16 +11,19 @@ import {
   X,
   type LucideIcon
 } from 'lucide-react'
-import type { CharacterCard, CharRefItem, SceneCast, VibeItem } from '@shared/types'
+import type { CharacterCard, CharRefItem, SceneCast, SceneCastGroup, VibeItem } from '@shared/types'
 import { cn } from '../lib/utils'
 import { useCharactersStore } from '../stores/characters-store'
 import { useCharRefsStore, useVibesStore } from '../stores/refs-store'
 import { nextCastColor, useScenesStore } from '../stores/scenes-store'
+import { useScenePlusStore } from '../stores/scene-plus-store'
 import { SortableList, SortableRow } from './sortable-list'
 import { Button } from './ui/button'
 import { Dialog, DialogContent, DialogTitle } from './ui/dialog'
 import { Input } from './ui/input'
 import { useT } from '../lib/i18n'
+
+const PLUS_CAST_COLORS = ['#ef4444', '#3b82f6', '#22c55e', '#a855f7', '#f59e0b', '#06b6d4']
 
 /**
  * 출연(Cast) 관리 — 예약에 붙는 캐릭터/레퍼런스 구성을 편집.
@@ -28,17 +31,96 @@ import { useT } from '../lib/i18n'
  * 하단 목록에서 기존 출연을 편집/삭제한다. 출연마다 고유색이 자동 배정되어
  * 씬 카드 예약 배지에 그 색으로 표시된다 (사이드바 예약 = 빨강).
  */
-export function SceneCastDialog({ onClose }: { onClose: () => void }): React.JSX.Element {
+export function SceneCastDialog({
+  onClose,
+  mode = 'scene'
+}: {
+  onClose: () => void
+  mode?: 'scene' | 'scene-plus'
+}): React.JSX.Element {
   const t = useT()
-  const casts = useScenesStore((s) => s.casts)
-  const addCast = useScenesStore((s) => s.addCast)
-  const updateCast = useScenesStore((s) => s.updateCast)
-  const removeCast = useScenesStore((s) => s.removeCast)
-  const groups = useScenesStore((s) => s.groups)
-  const addGroup = useScenesStore((s) => s.addGroup)
-  const updateGroup = useScenesStore((s) => s.updateGroup)
-  const removeGroup = useScenesStore((s) => s.removeGroup)
-  const reorderCasts = useScenesStore((s) => s.reorderCasts)
+  const sceneCasts = useScenesStore((s) => s.casts)
+  const sceneAddCast = useScenesStore((s) => s.addCast)
+  const sceneUpdateCast = useScenesStore((s) => s.updateCast)
+  const sceneRemoveCast = useScenesStore((s) => s.removeCast)
+  const sceneGroups = useScenesStore((s) => s.groups)
+  const sceneAddGroup = useScenesStore((s) => s.addGroup)
+  const sceneUpdateGroup = useScenesStore((s) => s.updateGroup)
+  const sceneRemoveGroup = useScenesStore((s) => s.removeGroup)
+  const sceneReorderCasts = useScenesStore((s) => s.reorderCasts)
+  const plusCasts = useScenePlusStore((s) => s.casts)
+  const plusCreateCast = useScenePlusStore((s) => s.createCast)
+  const plusUpdateCast = useScenePlusStore((s) => s.updateCast)
+  const plusDeleteCast = useScenePlusStore((s) => s.deleteCast)
+  const plusReorderCasts = useScenePlusStore((s) => s.reorderCasts)
+  const plusGroups = useScenePlusStore((s) => s.groups)
+  const plusCreateGroup = useScenePlusStore((s) => s.createGroup)
+  const plusUpdateGroup = useScenePlusStore((s) => s.updateGroup)
+  const plusDeleteGroup = useScenePlusStore((s) => s.deleteGroup)
+  const isPlus = mode === 'scene-plus'
+  const casts: SceneCast[] = isPlus
+    ? plusCasts.map((cast, index) => ({
+        id: String(cast.id),
+        name: cast.name,
+        color: PLUS_CAST_COLORS[index % PLUS_CAST_COLORS.length],
+        characterIds: cast.characterPromptId == null ? [] : [cast.characterPromptId],
+        charRefIds: cast.charRefIds,
+        vibeIds: cast.vibeIds
+      }))
+    : sceneCasts
+  const groups: SceneCastGroup[] = isPlus
+    ? plusGroups.map((group) => ({
+        id: String(group.id),
+        name: group.name,
+        castIds: group.castIds.map(String)
+      }))
+    : sceneGroups
+  const addCast = (
+    data: Pick<SceneCast, 'name' | 'characterIds' | 'charRefIds' | 'vibeIds'>
+  ): void => {
+    if (isPlus) {
+      void plusCreateCast({
+        name: data.name,
+        characterPromptId: data.characterIds[0] ?? null,
+        charRefIds: data.charRefIds,
+        vibeIds: data.vibeIds
+      })
+    } else sceneAddCast(data)
+  }
+  const updateCast = (id: string, patch: Partial<SceneCast>): void => {
+    if (isPlus) {
+      void plusUpdateCast(Number(id), {
+        name: patch.name,
+        characterPromptId: patch.characterIds?.[0] ?? null,
+        charRefIds: patch.charRefIds,
+        vibeIds: patch.vibeIds
+      })
+    } else sceneUpdateCast(id, patch)
+  }
+  const removeCast = (id: string): void => {
+    if (isPlus) void plusDeleteCast(Number(id))
+    else sceneRemoveCast(id)
+  }
+  const reorderCasts = (ids: string[]): void => {
+    if (isPlus) void plusReorderCasts(ids.map(Number))
+    else sceneReorderCasts(ids)
+  }
+  const addGroup = (data: Pick<SceneCastGroup, 'name' | 'castIds'>): void => {
+    if (isPlus) void plusCreateGroup({ name: data.name, castIds: data.castIds.map(Number) })
+    else sceneAddGroup(data)
+  }
+  const updateGroup = (id: string, patch: Partial<SceneCastGroup>): void => {
+    if (isPlus)
+      void plusUpdateGroup(Number(id), {
+        name: patch.name,
+        castIds: patch.castIds?.map(Number)
+      })
+    else sceneUpdateGroup(id, patch)
+  }
+  const removeGroup = (id: string): void => {
+    if (isPlus) void plusDeleteGroup(Number(id))
+    else sceneRemoveGroup(id)
+  }
   const characters = useCharactersStore((s) => s.items)
   const charFolders = useCharactersStore((s) => s.folders)
   const charRefs = useCharRefsStore((s) => s.items) as CharRefItem[]
@@ -171,7 +253,9 @@ export function SceneCastDialog({ onClose }: { onClose: () => void }): React.JSX
                   characters={characters}
                   folders={charFolders}
                   selectedIds={characterIds}
-                  onToggle={(id) => toggle(characterIds, setCharacterIds, id)}
+                  onToggle={(id) =>
+                    isPlus ? setCharacterIds([id]) : toggle(characterIds, setCharacterIds, id)
+                  }
                 />
               </div>
             </section>

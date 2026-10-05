@@ -1,4 +1,5 @@
 export const KO = {
+  'ui.scenePlus': '씬+',
   'ui.decreaseBatchCount': '배치 수 감소',
   'ui.batchCount': '배치 수',
   'ui.increaseBatchCount': '배치 수 증가',
@@ -157,6 +158,7 @@ export const KO = {
   'ui.mainSaveFolder': '메인 저장 폴더',
   'ui.regularGenerationsAreSavedDirectlyIntoThisFolder': '일반 생성 이미지가 이 폴더에 바로 쌓임',
   'ui.sceneSaveFolder': '씬 저장 폴더',
+  'ui.scenePlusSaveFolder': '씬+ 저장 폴더',
   'ui.organizedUnderThisFolderByPresetSceneName': '이 폴더 아래 프리셋/씬 이름으로 정리됨',
   'ui.dataBackup': '데이터 백업',
   'ui.fullLibraryJsonNais2BackupCompatible': '라이브러리 전체 JSON (NAIS2 백업 호환)',
@@ -604,6 +606,7 @@ export const KO = {
   'ui.unknownBackupFormat': '알 수 없는 백업 형식입니다',
   'ui.saveImage': '이미지 저장',
   'ui.chooseSceneSaveFolder': '씬 저장 폴더 선택',
+  'ui.chooseScenePlusSaveFolder': '씬+ 저장 폴더 선택',
   'ui.chooseSaveFolder': '저장 폴더 선택',
   'ui.valueImagesDoneValueFailed': '{0}장 완료 · {1}장 실패',
   'ui.valueImagesDone': '{0}장 완료',

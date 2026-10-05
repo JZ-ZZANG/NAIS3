@@ -3,6 +3,7 @@ import { preprocessRequest } from '../../../main/fragments/request'
 import { processWildcards, resetSequentialCounters } from '../../../main/fragments/processor'
 import { removeComments } from '@shared/nai-presets'
 import { modelCapabilities } from '@shared/nai-models'
+import { applyScenePlusRequest } from '@shared/scene-plus-request'
 import { UPSCALE_MODEL, UPSCALE_SCALE } from '../../../main/nai/upscale-request'
 import {
   normalizeDelayMs,
@@ -161,6 +162,7 @@ async function saveBrowserImage(
       base64,
       payloadJson,
       sceneId: null,
+      scenePlusId: null,
       favorite: false
     })
     return filePath
@@ -254,6 +256,7 @@ async function runQueue(): Promise<void> {
             base64: result.base64,
             payloadJson: result.payloadJson,
             sceneId: item!.request.sceneId ?? null,
+            scenePlusId: item!.request.scenePlusId ?? null,
             favorite: false
           }
           next.images.unshift(created)
@@ -270,6 +273,14 @@ async function runQueue(): Promise<void> {
             scene.imageCount += 1
             scene.thumbnail = created.thumbnail
             scene.thumbnailPath = created.filePath
+          }
+          const plusScene = next.scenePlusScenes.find(
+            (candidate) => candidate.id === created.scenePlusId
+          )
+          if (plusScene) {
+            plusScene.imageCount += 1
+            plusScene.thumbnail = created.thumbnail
+            plusScene.thumbnailPath = created.filePath
           }
           return created
         })
@@ -292,6 +303,9 @@ async function runQueue(): Promise<void> {
         item.state = 'done'
         if (image.sceneId != null) {
           emit('scenes:changed', { sceneId: image.sceneId, filePath: image.filePath })
+        }
+        if (image.scenePlusId != null) {
+          emit('scenePlus:changed', { sceneId: image.scenePlusId, filePath: image.filePath })
         }
       } catch (error) {
         if (controller.signal.aborted) item.state = 'cancelled'
@@ -827,6 +841,7 @@ async function dispatch(channel: string, rawRequest: unknown): Promise<unknown> 
 
   if (channel.startsWith('scenePresets:') || channel.startsWith('scenes:'))
     return scenesDispatch(channel, request)
+  if (channel.startsWith('scenePlus:')) return scenePlusDispatch(channel, request)
   if (channel.startsWith('promptPresets:')) return promptPresetsDispatch(channel, request)
   if (channel.startsWith('library:')) return libraryDispatch(channel, request)
 
@@ -1192,6 +1207,306 @@ async function scenesDispatch(channel: string, request: Record<string, unknown>)
     if (channel === 'scenes:openFolder') return { ok: false }
     return undefined
   })
+}
+
+function enqueueBrowserRequests(requests: GenerationRequest[]): string[] {
+  const ids = requests.map((generation) => {
+    const id = crypto.randomUUID()
+    queue.items.push({ id, state: 'pending', request: generation })
+    return id
+  })
+  if (ids.length) {
+    emit('queue:changed', structuredClone(queue))
+    void runQueue()
+  }
+  return ids
+}
+
+async function scenePlusDispatch(
+  channel: string,
+  request: Record<string, unknown>
+): Promise<unknown> {
+  if (
+    channel === 'scenePlus:exportJson' ||
+    channel === 'scenePlus:exportZip' ||
+    channel === 'scenePlus:importJson'
+  ) {
+    throw new Error(`${channel} is not available in the browser runtime yet`)
+  }
+  if (channel === 'scenePlus:enqueueReserved') {
+    const base = request.request as GenerationRequest
+    const seedLocked = Boolean(request.seedLocked)
+    const requests = await mutateBrowserState((state) => {
+      const output: GenerationRequest[] = []
+      for (const scene of state.scenePlusScenes.filter((item) => item.reserveCount > 0)) {
+        const settings = state.scenePlusCastSettings
+        const fixed =
+          Object.keys(settings.castAssignments).length ||
+          Object.keys(settings.groupAssignments).length
+            ? resolveBrowserPlusCasts(
+                state,
+                settings.castAssignments,
+                settings.groupAssignments,
+                scene.slots.length
+              )
+            : null
+        const built = applyScenePlusRequest(
+          base,
+          scene,
+          fixed?.actors ?? base.characterPrompts,
+          fixed ? { charRefIds: fixed.charRefIds, vibeIds: fixed.vibeIds } : undefined
+        )
+        for (let index = 0; index < scene.reserveCount; index++) {
+          output.push({
+            ...built,
+            seed:
+              seedLocked && base.seed >= 0
+                ? (base.seed + index) % 4294967296
+                : Math.floor(Math.random() * 4294967295)
+          })
+        }
+        scene.reserveCount = 0
+      }
+      return output
+    })
+    return { ids: enqueueBrowserRequests(requests) }
+  }
+  if (channel === 'scenePlus:generateOne') {
+    const state = await readBrowserState()
+    const scene = state.scenePlusScenes.find((item) => item.id === request.sceneId)
+    if (!scene) return { ids: [] }
+    const settings = state.scenePlusCastSettings
+    const fixed =
+      Object.keys(settings.castAssignments).length || Object.keys(settings.groupAssignments).length
+        ? resolveBrowserPlusCasts(
+            state,
+            settings.castAssignments,
+            settings.groupAssignments,
+            scene.slots.length
+          )
+        : null
+    const base = request.request as GenerationRequest
+    const built = applyScenePlusRequest(
+      base,
+      scene,
+      fixed?.actors ?? base.characterPrompts,
+      fixed ? { charRefIds: fixed.charRefIds, vibeIds: fixed.vibeIds } : undefined
+    )
+    return { ids: enqueueBrowserRequests([built]) }
+  }
+
+  return mutateBrowserState((state) => {
+    if (channel === 'scenePlus:presets:list') return { items: state.scenePlusPresets }
+    if (channel === 'scenePlus:presets:create') {
+      const id = nextBrowserId(state)
+      state.scenePlusPresets.push({
+        id,
+        name: String(request.name),
+        defaultWidth: 832,
+        defaultHeight: 1216
+      })
+      return { id }
+    }
+    if (channel === 'scenePlus:presets:update') {
+      const preset = state.scenePlusPresets.find((item) => item.id === request.id)
+      if (preset) Object.assign(preset, request.patch)
+    }
+    if (channel === 'scenePlus:presets:delete' && state.scenePlusPresets.length > 1) {
+      state.scenePlusPresets = state.scenePlusPresets.filter((item) => item.id !== request.id)
+      state.scenePlusScenes = state.scenePlusScenes.filter((item) => item.presetId !== request.id)
+    }
+    if (channel === 'scenePlus:presets:reorder') {
+      const order = new Map((request.ids as number[]).map((id, index) => [id, index]))
+      state.scenePlusPresets.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0))
+    }
+    if (channel === 'scenePlus:castSettings:get') return state.scenePlusCastSettings
+    if (channel === 'scenePlus:castSettings:set') {
+      state.scenePlusCastSettings = {
+        castAssignments: request.castAssignments as Record<number, number>,
+        groupAssignments: request.groupAssignments as Record<number, number>,
+        slotCount: Number(request.slotCount) || 0
+      }
+    }
+    if (channel === 'scenePlus:scenes:list')
+      return {
+        items: state.scenePlusScenes.filter((item) => item.presetId === request.presetId)
+      }
+    if (channel === 'scenePlus:scenes:create') {
+      const preset = state.scenePlusPresets.find((item) => item.id === request.presetId)
+      const id = nextBrowserId(state)
+      state.scenePlusScenes.push({
+        id,
+        presetId: Number(request.presetId),
+        name: String(request.name),
+        prompt: '',
+        negativePrompt: '',
+        width: preset?.defaultWidth ?? 832,
+        height: preset?.defaultHeight ?? 1216,
+        useCoords: false,
+        slots: [{ index: 1, prompt: '', negativePrompt: '' }],
+        reserveCount: 0,
+        imageCount: 0,
+        thumbnail: '',
+        thumbnailPath: ''
+      })
+      return { id }
+    }
+    if (channel === 'scenePlus:scenes:update') {
+      const scene = state.scenePlusScenes.find((item) => item.id === request.id)
+      if (scene) Object.assign(scene, request.patch)
+    }
+    if (channel === 'scenePlus:scenes:duplicate') {
+      const source = state.scenePlusScenes.find((item) => item.id === request.id)
+      if (!source) return { id: 0 }
+      const id = nextBrowserId(state)
+      state.scenePlusScenes.push({
+        ...structuredClone(source),
+        id,
+        name: `${source.name} 복사`,
+        reserveCount: 0,
+        imageCount: 0,
+        thumbnail: '',
+        thumbnailPath: ''
+      })
+      return { id }
+    }
+    if (channel === 'scenePlus:scenes:delete')
+      state.scenePlusScenes = state.scenePlusScenes.filter((item) => item.id !== request.id)
+    if (channel === 'scenePlus:scenes:reorder') {
+      const order = new Map((request.ids as number[]).map((id, index) => [id, index]))
+      state.scenePlusScenes.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0))
+    }
+    if (channel === 'scenePlus:scenes:setReserve') {
+      const scene = state.scenePlusScenes.find((item) => item.id === request.id)
+      if (scene) scene.reserveCount = Math.max(0, Math.floor(Number(request.count)))
+    }
+    if (channel === 'scenePlus:scenes:images') {
+      const all = state.images
+        .filter(
+          (image) =>
+            image.scenePlusId === request.sceneId && (!request.favoritesOnly || image.favorite)
+        )
+        .sort((a, b) => b.id - a.id)
+      const offset = Number(request.offset) || 0
+      const limit = Number(request.limit) || 60
+      return {
+        total: all.length,
+        items: all.slice(offset, offset + limit).map((image) => ({
+          id: image.id,
+          filePath: image.filePath,
+          thumbnail: image.thumbnail,
+          seed: image.seed,
+          favorite: image.favorite
+        }))
+      }
+    }
+    if (channel === 'scenePlus:reservedTotal')
+      return {
+        total: state.scenePlusScenes.reduce((sum, scene) => sum + scene.reserveCount, 0)
+      }
+    if (channel === 'scenePlus:casts:list') return { items: state.scenePlusCasts }
+    if (channel === 'scenePlus:casts:create') {
+      const id = nextBrowserId(state)
+      state.scenePlusCasts.push({
+        id,
+        name: String(request.name),
+        characterPromptId: (request.characterPromptId as number | null) ?? null,
+        charRefIds: [...((request.charRefIds as number[]) ?? [])],
+        vibeIds: [...((request.vibeIds as number[]) ?? [])]
+      })
+      return { id }
+    }
+    if (channel === 'scenePlus:casts:update') {
+      const cast = state.scenePlusCasts.find((item) => item.id === request.id)
+      if (cast) Object.assign(cast, request.patch)
+    }
+    if (channel === 'scenePlus:casts:delete') {
+      state.scenePlusCasts = state.scenePlusCasts.filter((item) => item.id !== request.id)
+      state.scenePlusCastSettings.castAssignments = Object.fromEntries(
+        Object.entries(state.scenePlusCastSettings.castAssignments).filter(
+          ([, castId]) => castId !== request.id
+        )
+      )
+      for (const group of state.scenePlusCastGroups)
+        group.castIds = group.castIds.filter((id) => id !== request.id)
+    }
+    if (channel === 'scenePlus:casts:reorder') {
+      const order = new Map((request.ids as number[]).map((id, index) => [id, index]))
+      state.scenePlusCasts.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0))
+    }
+    if (channel === 'scenePlus:castGroups:list') return { items: state.scenePlusCastGroups }
+    if (channel === 'scenePlus:castGroups:create') {
+      const id = nextBrowserId(state)
+      state.scenePlusCastGroups.push({
+        id,
+        name: String(request.name),
+        castIds: [...((request.castIds as number[]) ?? [])]
+      })
+      return { id }
+    }
+    if (channel === 'scenePlus:castGroups:update') {
+      const group = state.scenePlusCastGroups.find((item) => item.id === request.id)
+      if (group) Object.assign(group, request.patch)
+    }
+    if (channel === 'scenePlus:castGroups:delete') {
+      state.scenePlusCastGroups = state.scenePlusCastGroups.filter((item) => item.id !== request.id)
+      state.scenePlusCastSettings.groupAssignments = Object.fromEntries(
+        Object.entries(state.scenePlusCastSettings.groupAssignments).filter(
+          ([, groupId]) => groupId !== request.id
+        )
+      )
+    }
+    return undefined
+  })
+}
+
+function resolveBrowserPlusCasts(
+  state: BrowserState,
+  assignments: Record<number, number>,
+  groupAssignments: Record<number, number>,
+  slotCount: number
+): {
+  actors: ({ prompt: string; negativePrompt: string; enabled: true } | null)[]
+  charRefIds: number[]
+  vibeIds: number[]
+} {
+  const maxGroupSlot = Math.max(
+    0,
+    ...Object.entries(groupAssignments).map(([slot, groupId]) => {
+      const group = state.scenePlusCastGroups.find((item) => item.id === groupId)
+      return Number(slot) + (group?.castIds.length ?? 1) - 1
+    })
+  )
+  const maxSlot = Math.max(maxGroupSlot, 0, ...Object.keys(assignments).map(Number))
+  const actors: ({ prompt: string; negativePrompt: string; enabled: true } | null)[] = Array.from(
+    { length: maxSlot },
+    () => null
+  )
+  const charRefIds: number[] = []
+  const vibeIds: number[] = []
+  const applyCast = (slot: number, castId: number): void => {
+    if (slot > slotCount) return
+    const cast = state.scenePlusCasts.find((item) => item.id === castId)
+    const character = state.characters.find((item) => item.id === cast?.characterPromptId)
+    if (!cast || !character?.prompt.trim()) return
+    actors[slot - 1] = {
+      prompt: character.prompt,
+      negativePrompt: character.negativePrompt,
+      enabled: true
+    }
+    charRefIds.push(...cast.charRefIds)
+    vibeIds.push(...cast.vibeIds)
+  }
+  for (const [rawSlot, groupId] of Object.entries(groupAssignments)) {
+    const group = state.scenePlusCastGroups.find((item) => item.id === groupId)
+    group?.castIds.forEach((castId, index) => applyCast(Number(rawSlot) + index, castId))
+  }
+  for (const [rawSlot, castId] of Object.entries(assignments)) applyCast(Number(rawSlot), castId)
+  return {
+    actors,
+    charRefIds: [...new Set(charRefIds)],
+    vibeIds: [...new Set(vibeIds)]
+  }
 }
 
 async function libraryDispatch(

@@ -9,6 +9,11 @@ import type {
   NaiAccountInfo,
   PromptPreset,
   Scene,
+  ScenePlusCast,
+  ScenePlusCastGroup,
+  ScenePlusCastSettings,
+  ScenePlusPreset,
+  ScenePlusScene,
   ScenePreset,
   VibeItem
 } from '@shared/types'
@@ -25,6 +30,7 @@ export interface BrowserImage extends HistoryItem {
   base64: string
   payloadJson: string | null
   sceneId: number | null
+  scenePlusId: number | null
   favorite: boolean
 }
 
@@ -50,6 +56,11 @@ export interface BrowserState {
   promptPresets: PromptPreset[]
   scenePresets: ScenePreset[]
   scenes: Scene[]
+  scenePlusPresets: ScenePlusPreset[]
+  scenePlusScenes: ScenePlusScene[]
+  scenePlusCasts: ScenePlusCast[]
+  scenePlusCastGroups: ScenePlusCastGroup[]
+  scenePlusCastSettings: ScenePlusCastSettings
   images: BrowserImage[]
   libraryImages: BrowserLibraryImage[]
   libraryStacks: LibraryStack[]
@@ -74,6 +85,18 @@ export function emptyState(): BrowserState {
     promptPresets: [],
     scenePresets: [],
     scenes: [],
+    scenePlusPresets: [
+      {
+        id: 0,
+        name: '기본',
+        defaultWidth: 832,
+        defaultHeight: 1216
+      }
+    ],
+    scenePlusScenes: [],
+    scenePlusCasts: [],
+    scenePlusCastGroups: [],
+    scenePlusCastSettings: { slotCount: 0, castAssignments: {}, groupAssignments: {} },
     images: [],
     libraryImages: [],
     libraryStacks: []
@@ -116,7 +139,14 @@ export async function readBrowserState(): Promise<BrowserState> {
   const stored = await transaction<BrowserState | undefined>('readonly', (store) =>
     store.get(STATE_KEY)
   )
-  return stored ? { ...emptyState(), ...stored } : emptyState()
+  const state = stored ? { ...emptyState(), ...stored } : emptyState()
+  state.scenePlusPresets = state.scenePlusPresets.map((preset) => ({
+    id: preset.id,
+    name: preset.name,
+    defaultWidth: preset.defaultWidth,
+    defaultHeight: preset.defaultHeight
+  }))
+  return state
 }
 
 export function mutateBrowserState<T>(

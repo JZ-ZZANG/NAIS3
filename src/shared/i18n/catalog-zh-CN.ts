@@ -1,6 +1,7 @@
 import type { MessageCatalog } from './catalog-ko'
 
 export const ZH_CN = {
+  'ui.scenePlus': '场景+',
   'ui.decreaseBatchCount': '减少批次数量',
   'ui.batchCount': '批次数量',
   'ui.increaseBatchCount': '增加批次数量',
@@ -158,6 +159,7 @@ export const ZH_CN = {
   'ui.mainSaveFolder': '主保存文件夹',
   'ui.regularGenerationsAreSavedDirectlyIntoThisFolder': '普通生成图片会直接保存到此文件夹',
   'ui.sceneSaveFolder': '场景保存文件夹',
+  'ui.scenePlusSaveFolder': '场景+保存文件夹',
   'ui.organizedUnderThisFolderByPresetSceneName': '按预设/场景名称整理到此文件夹下',
   'ui.dataBackup': '数据备份',
   'ui.fullLibraryJsonNais2BackupCompatible': '完整图库 JSON（兼容 NAIS2 备份）',
@@ -599,6 +601,7 @@ export const ZH_CN = {
   'ui.unknownBackupFormat': '未知的备份格式',
   'ui.saveImage': '保存图片',
   'ui.chooseSceneSaveFolder': '选择场景保存文件夹',
+  'ui.chooseScenePlusSaveFolder': '选择场景+保存文件夹',
   'ui.chooseSaveFolder': '选择保存文件夹',
   'ui.valueImagesDoneValueFailed': '{0} 张完成 · {1} 张失败',
   'ui.valueImagesDone': '{0} 张完成',

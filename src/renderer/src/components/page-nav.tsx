@@ -1,15 +1,24 @@
-import { Globe, Image, LayoutGrid, Library, Wand2, type LucideIcon } from 'lucide-react'
+import {
+  Clapperboard,
+  Globe,
+  Image,
+  LayoutGrid,
+  Library,
+  Wand2,
+  type LucideIcon
+} from 'lucide-react'
 import { motion } from 'motion/react'
 import type { MessageId } from '@shared/i18n'
 import { cn } from '../lib/utils'
 import { useT } from '../lib/i18n'
 import { useLayoutStore } from '../stores/layout-store'
 
-type Page = 'main' | 'scene' | 'director' | 'library' | 'websearch'
+type Page = 'main' | 'scene' | 'scene-plus' | 'director' | 'library' | 'websearch'
 
 const PAGES: { id: Page; label: MessageId; icon: LucideIcon }[] = [
   { id: 'main', label: 'ui.main', icon: Image },
   { id: 'scene', label: 'ui.scene', icon: LayoutGrid },
+  { id: 'scene-plus', label: 'ui.scenePlus', icon: Clapperboard },
   { id: 'director', label: 'ui.director', icon: Wand2 },
   { id: 'library', label: 'ui.library', icon: Library },
   { id: 'websearch', label: 'ui.web', icon: Globe }

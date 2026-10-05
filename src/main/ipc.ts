@@ -113,6 +113,38 @@ import {
   setSceneCharacterAddition
 } from './scenes/addition-repo'
 import {
+  createPlusCast,
+  createPlusCastGroup,
+  createPlusPreset,
+  createPlusScene,
+  deletePlusCast,
+  deletePlusCastGroup,
+  deletePlusPreset,
+  deletePlusScene,
+  duplicatePlusScene,
+  enqueuePlusOne,
+  enqueuePlusReserved,
+  exportPlusJson,
+  exportPlusZip,
+  getPlusCastSettings,
+  importPlusJson,
+  listPlusCasts,
+  listPlusCastGroups,
+  listPlusPresets,
+  listPlusScenes,
+  plusSceneImages,
+  plusReservedTotal,
+  reorderPlusCasts,
+  reorderPlusPresets,
+  reorderPlusScenes,
+  setPlusCastSettings,
+  setPlusReserve,
+  updatePlusCast,
+  updatePlusCastGroup,
+  updatePlusPreset,
+  updatePlusScene
+} from './scenes/plus-repo'
+import {
   listPromptPresets,
   createPromptPreset,
   updatePromptPreset,
@@ -157,6 +189,7 @@ import {
   imagesRoot,
   isMemoryPath,
   isUnderImagesRoot,
+  scenePlusRoot,
   sceneDir,
   scenesRoot
 } from './images/storage'
@@ -389,6 +422,48 @@ export function registerIpcHandlers(ctx: { dbVersion: number; queue: GenerationQ
   handle('sceneAddition:clear', ({ sceneId }) => {
     clearSceneCharacterAddition(sceneId)
   })
+  handle('scenePlus:presets:list', () => ({ items: listPlusPresets() }))
+  handle('scenePlus:presets:create', ({ name }) => ({ id: createPlusPreset(name) }))
+  handle('scenePlus:presets:update', ({ id, patch }) => updatePlusPreset(id, patch))
+  handle('scenePlus:presets:delete', ({ id }) => deletePlusPreset(id))
+  handle('scenePlus:presets:reorder', ({ ids }) => reorderPlusPresets(ids))
+  handle('scenePlus:castSettings:get', () => getPlusCastSettings())
+  handle('scenePlus:castSettings:set', (settings) => setPlusCastSettings(settings))
+  handle('scenePlus:exportJson', async ({ presetId }) => ({
+    saved: await exportPlusJson(presetId)
+  }))
+  handle('scenePlus:exportZip', async ({ presetId }) => ({
+    count: await exportPlusZip(presetId)
+  }))
+  handle('scenePlus:importJson', async () => importPlusJson())
+  handle('scenePlus:scenes:list', ({ presetId }) => ({ items: listPlusScenes(presetId) }))
+  handle('scenePlus:scenes:create', ({ presetId, name }) => ({
+    id: createPlusScene(presetId, name)
+  }))
+  handle('scenePlus:scenes:update', ({ id, patch }) => updatePlusScene(id, patch))
+  handle('scenePlus:scenes:duplicate', ({ id }) => ({ id: duplicatePlusScene(id) }))
+  handle('scenePlus:scenes:delete', ({ id }) => deletePlusScene(id))
+  handle('scenePlus:scenes:reorder', ({ ids }) => reorderPlusScenes(ids))
+  handle('scenePlus:scenes:setReserve', ({ id, count }) => setPlusReserve(id, count))
+  handle('scenePlus:scenes:images', ({ sceneId, limit, offset, favoritesOnly }) =>
+    plusSceneImages(sceneId, limit, offset, favoritesOnly)
+  )
+  handle('scenePlus:reservedTotal', () => ({ total: plusReservedTotal() }))
+  handle('scenePlus:enqueueReserved', ({ request, seedLocked }) => ({
+    ids: enqueuePlusReserved(ctx.queue, request, seedLocked)
+  }))
+  handle('scenePlus:generateOne', ({ sceneId, request }) => ({
+    ids: enqueuePlusOne(ctx.queue, sceneId, request)
+  }))
+  handle('scenePlus:casts:list', () => ({ items: listPlusCasts() }))
+  handle('scenePlus:casts:create', (request) => ({ id: createPlusCast(request) }))
+  handle('scenePlus:casts:update', ({ id, patch }) => updatePlusCast(id, patch))
+  handle('scenePlus:casts:delete', ({ id }) => deletePlusCast(id))
+  handle('scenePlus:casts:reorder', ({ ids }) => reorderPlusCasts(ids))
+  handle('scenePlus:castGroups:list', () => ({ items: listPlusCastGroups() }))
+  handle('scenePlus:castGroups:create', (data) => ({ id: createPlusCastGroup(data) }))
+  handle('scenePlus:castGroups:update', ({ id, patch }) => updatePlusCastGroup(id, patch))
+  handle('scenePlus:castGroups:delete', ({ id }) => deletePlusCastGroup(id))
   handle('scenes:update', ({ id, patch }) => {
     updateScene(id, patch)
   })
@@ -601,10 +676,14 @@ export function registerIpcHandlers(ctx: { dbVersion: number; queue: GenerationQ
     return { copied: true }
   })
 
-  const saveDirKey = (target?: 'main' | 'scene'): string =>
-    target === 'scene' ? 'scene_save_dir' : 'save_dir'
-  const saveDirOf = (target?: 'main' | 'scene'): string =>
-    target === 'scene' ? scenesRoot() : imagesRoot()
+  const saveDirKey = (target?: 'main' | 'scene' | 'scene-plus'): string =>
+    target === 'scene-plus'
+      ? 'scene_plus_save_dir'
+      : target === 'scene'
+        ? 'scene_save_dir'
+        : 'save_dir'
+  const saveDirOf = (target?: 'main' | 'scene' | 'scene-plus'): string =>
+    target === 'scene-plus' ? scenePlusRoot() : target === 'scene' ? scenesRoot() : imagesRoot()
 
   handle('settings:getSaveDir', (req) => {
     const target = req?.target
@@ -616,7 +695,12 @@ export function registerIpcHandlers(ctx: { dbVersion: number; queue: GenerationQ
   handle('settings:pickSaveDir', async (req) => {
     const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
     const result = await dialog.showOpenDialog(win, {
-      title: req?.target === 'scene' ? t('ui.chooseSceneSaveFolder') : t('ui.chooseSaveFolder'),
+      title:
+        req?.target === 'scene-plus'
+          ? t('ui.chooseScenePlusSaveFolder')
+          : req?.target === 'scene'
+            ? t('ui.chooseSceneSaveFolder')
+            : t('ui.chooseSaveFolder'),
       properties: ['openDirectory', 'createDirectory']
     })
     if (result.canceled || result.filePaths.length === 0) return { dir: null }

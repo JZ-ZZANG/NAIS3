@@ -39,6 +39,7 @@ import { RESOLUTIONS, imageUrl } from '../lib/constants'
 import { useT } from '../lib/i18n'
 import { useGenerationStore } from '../stores/generation-store'
 import { loadCasts, useScenesStore } from '../stores/scenes-store'
+import { useScenePlusStore } from '../stores/scene-plus-store'
 import { useResolutionsStore } from '../stores/resolutions-store'
 import { askConfirm, askText } from '../stores/dialog-store'
 import { toast } from '../stores/toast-store'
@@ -60,6 +61,8 @@ import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select'
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip'
 
+const PLUS_CAST_COLORS = ['#ef4444', '#3b82f6', '#22c55e', '#a855f7', '#f59e0b', '#06b6d4']
+
 export function SceneMode(): React.JSX.Element {
   const scenes = useScenesStore((s) => s.scenes)
   const selectedId = useScenesStore((s) => s.selectedId)
@@ -78,14 +81,48 @@ export function SceneMode(): React.JSX.Element {
 }
 
 /** NAIS2식 프리셋 드롭다운 — 현재 프리셋 표시 + 전환/추가/이름변경/삭제 */
-function PresetDropdown(): React.JSX.Element {
-  const presets = useScenesStore((s) => s.presets)
-  const activePresetId = useScenesStore((s) => s.activePresetId)
-  const setActivePreset = useScenesStore((s) => s.setActivePreset)
-  const createPreset = useScenesStore((s) => s.createPreset)
-  const renamePreset = useScenesStore((s) => s.renamePreset)
-  const deletePreset = useScenesStore((s) => s.deletePreset)
-  const reorderPresets = useScenesStore((s) => s.reorderPresets)
+export function PresetDropdown({
+  mode = 'scene'
+}: {
+  mode?: 'scene' | 'scene-plus'
+}): React.JSX.Element {
+  const scenePresets = useScenesStore((s) => s.presets)
+  const sceneActivePresetId = useScenesStore((s) => s.activePresetId)
+  const sceneSetActivePreset = useScenesStore((s) => s.setActivePreset)
+  const sceneCreatePreset = useScenesStore((s) => s.createPreset)
+  const sceneRenamePreset = useScenesStore((s) => s.renamePreset)
+  const sceneDeletePreset = useScenesStore((s) => s.deletePreset)
+  const sceneReorderPresets = useScenesStore((s) => s.reorderPresets)
+  const plusPresets = useScenePlusStore((s) => s.presets)
+  const plusActivePresetId = useScenePlusStore((s) => s.activePresetId)
+  const plusSelectPreset = useScenePlusStore((s) => s.selectPreset)
+  const plusCreatePreset = useScenePlusStore((s) => s.createPreset)
+  const plusUpdatePreset = useScenePlusStore((s) => s.updatePreset)
+  const plusDeletePreset = useScenePlusStore((s) => s.deletePreset)
+  const plusReorderPresets = useScenePlusStore((s) => s.reorderPresets)
+  const isPlus = mode === 'scene-plus'
+  const presets = isPlus ? plusPresets : scenePresets
+  const activePresetId = isPlus ? plusActivePresetId : sceneActivePresetId
+  const setActivePreset = (id: number): void => {
+    if (isPlus) void plusSelectPreset(id)
+    else void sceneSetActivePreset(id)
+  }
+  const createPreset = (name: string): void => {
+    if (isPlus) void plusCreatePreset(name)
+    else void sceneCreatePreset(name)
+  }
+  const renamePreset = (id: number, name: string): void => {
+    if (isPlus) void plusUpdatePreset(id, { name })
+    else void sceneRenamePreset(id, name)
+  }
+  const deletePreset = (id: number): void => {
+    if (isPlus) void plusDeletePreset(id)
+    else void sceneDeletePreset(id)
+  }
+  const reorderPresets = (ids: number[]): void => {
+    if (isPlus) void plusReorderPresets(ids)
+    else void sceneReorderPresets(ids)
+  }
   const [open, setOpen] = useState(false)
   const t = useT()
 
@@ -185,21 +222,69 @@ function PresetDropdown(): React.JSX.Element {
  * 출연 셀렉터 — 예약(+)이 어느 출연으로 기록될지 선택.
  * "사이드바 설정" = 기본 동작 (지금까지와 동일), 출연 선택 시 그 구성으로 예약/생성.
  */
-function CastSelector(): React.JSX.Element {
-  const casts = useScenesStore((s) => s.casts)
-  const groups = useScenesStore((s) => s.groups)
-  const activeCastId = useScenesStore((s) => s.activeCastId)
+export function CastSelector({
+  mode = 'scene'
+}: {
+  mode?: 'scene' | 'scene-plus'
+}): React.JSX.Element {
+  const sceneCasts = useScenesStore((s) => s.casts)
+  const sceneGroups = useScenesStore((s) => s.groups)
+  const sceneActiveCastId = useScenesStore((s) => s.activeCastId)
   const activeGroupId = useScenesStore((s) => s.activeGroupId)
-  const setActiveCast = useScenesStore((s) => s.setActiveCast)
+  const sceneSetActiveCast = useScenesStore((s) => s.setActiveCast)
   const setActiveGroup = useScenesStore((s) => s.setActiveGroup)
-  const removeCast = useScenesStore((s) => s.removeCast)
-  const reorderCasts = useScenesStore((s) => s.reorderCasts)
+  const sceneRemoveCast = useScenesStore((s) => s.removeCast)
+  const sceneReorderCasts = useScenesStore((s) => s.reorderCasts)
+  const plusCasts = useScenePlusStore((s) => s.casts)
+  const plusActiveCastId = useScenePlusStore((s) => s.activeCastId)
+  const plusSetActiveCast = useScenePlusStore((s) => s.setActiveCast)
+  const plusDeleteCast = useScenePlusStore((s) => s.deleteCast)
+  const plusReorderCasts = useScenePlusStore((s) => s.reorderCasts)
+  const plusGroups = useScenePlusStore((s) => s.groups)
+  const plusActiveGroupId = useScenePlusStore((s) => s.activeGroupId)
+  const plusSetActiveGroup = useScenePlusStore((s) => s.setActiveGroup)
+  const isPlus = mode === 'scene-plus'
+  const casts: SceneCast[] = isPlus
+    ? plusCasts.map((cast, index) => ({
+        id: String(cast.id),
+        name: cast.name,
+        color: PLUS_CAST_COLORS[index % PLUS_CAST_COLORS.length],
+        characterIds: cast.characterPromptId == null ? [] : [cast.characterPromptId],
+        charRefIds: cast.charRefIds,
+        vibeIds: cast.vibeIds
+      }))
+    : sceneCasts
+  const groups = isPlus
+    ? plusGroups.map((group) => ({
+        id: String(group.id),
+        name: group.name,
+        castIds: group.castIds.map(String)
+      }))
+    : sceneGroups
+  const activeCastId = isPlus ? String(plusActiveCastId ?? '') : sceneActiveCastId
+  const resolvedActiveGroupId = isPlus ? String(plusActiveGroupId ?? '') : activeGroupId
+  const setActiveCast = (id: string): void => {
+    if (isPlus) plusSetActiveCast(id ? Number(id) : null)
+    else sceneSetActiveCast(id)
+  }
+  const selectActiveGroup = (id: string): void => {
+    if (isPlus) plusSetActiveGroup(id ? Number(id) : null)
+    else setActiveGroup(id)
+  }
+  const removeCast = (id: string): void => {
+    if (isPlus) void plusDeleteCast(Number(id))
+    else sceneRemoveCast(id)
+  }
+  const reorderCasts = (ids: string[]): void => {
+    if (isPlus) void plusReorderCasts(ids.map(Number))
+    else sceneReorderCasts(ids)
+  }
   const [open, setOpen] = useState(false)
   const [manageOpen, setManageOpen] = useState(false)
   const t = useT()
 
   const active = casts.find((c) => c.id === activeCastId)
-  const activeGroup = groups.find((g) => g.id === activeGroupId)
+  const activeGroup = groups.find((g) => g.id === resolvedActiveGroupId)
   const validGroupCount =
     activeGroup?.castIds.filter((id) => casts.some((c) => c.id === id)).length ?? 0
   const label = activeGroup
@@ -315,11 +400,11 @@ function CastSelector(): React.JSX.Element {
                       key={g.id}
                       className={cn(
                         'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-surface-2',
-                        g.id === activeGroupId && 'font-semibold text-accent'
+                        g.id === resolvedActiveGroupId && 'font-semibold text-accent'
                       )}
                       disabled={count === 0}
                       onClick={() => {
-                        setActiveGroup(g.id)
+                        selectActiveGroup(g.id)
                         setOpen(false)
                       }}
                     >
@@ -344,7 +429,7 @@ function CastSelector(): React.JSX.Element {
           </button>
         </PopoverContent>
       </Popover>
-      {manageOpen && <SceneCastDialog onClose={() => setManageOpen(false)} />}
+      {manageOpen && <SceneCastDialog mode={mode} onClose={() => setManageOpen(false)} />}
     </>
   )
 }

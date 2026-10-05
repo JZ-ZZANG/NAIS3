@@ -82,6 +82,8 @@ export interface GenerationRequest {
   source?: SourceImage
   /** 씬 생성이면 씬 id (저장 시 images.scene_id 연결) */
   sceneId?: number
+  /** 씬+ 생성이면 전용 씬 id. 기존 sceneId와 동시에 사용하지 않는다. */
+  scenePlusId?: number
   /** 지정 시 enabled 대신 이 바이브들 사용 (출연 예약 — id 참조, [] = 바이브 없이) */
   vibeIds?: number[]
   /** 지정 시 enabled 대신 이 캐릭레퍼들 사용 (출연 예약 — id 참조, [] = 레퍼 없이) */
@@ -345,6 +347,58 @@ export interface SceneCharacterAddition {
   vibeIds: number[]
 }
 
+export interface ScenePlusSlot {
+  index: number
+  prompt: string
+  negativePrompt: string
+  /** useCoords=true인 씬에서는 반드시 존재한다. */
+  center?: { x: number; y: number }
+}
+
+/** 씬+ 전체에서 공유하는 단일 캐릭터 출연. */
+export interface ScenePlusCast {
+  id: number
+  name: string
+  characterPromptId: number | null
+  charRefIds: number[]
+  vibeIds: number[]
+}
+
+export interface ScenePlusCastGroup {
+  id: number
+  name: string
+  castIds: number[]
+}
+
+export interface ScenePlusCastSettings {
+  slotCount: number
+  castAssignments: Record<number, number>
+  groupAssignments: Record<number, number>
+}
+
+export interface ScenePlusPreset {
+  id: number
+  name: string
+  defaultWidth: number
+  defaultHeight: number
+}
+
+export interface ScenePlusScene {
+  id: number
+  presetId: number
+  name: string
+  prompt: string
+  negativePrompt: string
+  width: number
+  height: number
+  useCoords: boolean
+  slots: ScenePlusSlot[]
+  reserveCount: number
+  imageCount: number
+  thumbnail: string
+  thumbnailPath: string
+}
+
 export interface Scene {
   id: number
   presetId: number
@@ -519,13 +573,19 @@ export interface IpcInvokeMap {
   /** 이미지를 클립보드로 복사 */
   'images:copy': { req: { filePath: string }; res: { copied: boolean } }
   /** 저장 폴더: 현재 경로 조회 / 폴더 선택 / 기본값으로 초기화 */
-  /** target 생략 = main(메인 모드). 'scene' = 씬 모드 저장 폴더 */
+  /** target 생략 = main(메인 모드). scene/scene-plus는 각 모드 전용 저장 폴더 */
   'settings:getSaveDir': {
-    req: { target?: 'main' | 'scene' } | void
+    req: { target?: 'main' | 'scene' | 'scene-plus' } | void
     res: { dir: string; isDefault: boolean }
   }
-  'settings:pickSaveDir': { req: { target?: 'main' | 'scene' } | void; res: { dir: string | null } }
-  'settings:resetSaveDir': { req: { target?: 'main' | 'scene' } | void; res: { dir: string } }
+  'settings:pickSaveDir': {
+    req: { target?: 'main' | 'scene' | 'scene-plus' } | void
+    res: { dir: string | null }
+  }
+  'settings:resetSaveDir': {
+    req: { target?: 'main' | 'scene' | 'scene-plus' } | void
+    res: { dir: string }
+  }
   /** 생성 지연 시간(ms)과 랜덤 범위 설정 — 큐에 즉시 반영 + 영속 */
   'gen:setDelay': { req: { ms: number; randomization?: GenerationDelayRandomization }; res: void }
   /** 큐 완료 네이티브 알림 (창이 포커스 없을 때만 표시) */
@@ -605,6 +665,74 @@ export interface IpcInvokeMap {
   }
   'sceneAddition:set': { req: SceneCharacterAddition; res: void }
   'sceneAddition:clear': { req: { sceneId: number }; res: void }
+  'scenePlus:presets:list': { req: void; res: { items: ScenePlusPreset[] } }
+  'scenePlus:presets:create': { req: { name: string }; res: { id: number } }
+  'scenePlus:presets:update': {
+    req: {
+      id: number
+      patch: Partial<Pick<ScenePlusPreset, 'name' | 'defaultWidth' | 'defaultHeight'>>
+    }
+    res: void
+  }
+  'scenePlus:presets:delete': { req: { id: number }; res: void }
+  'scenePlus:presets:reorder': { req: { ids: number[] }; res: void }
+  'scenePlus:castSettings:get': { req: void; res: ScenePlusCastSettings }
+  'scenePlus:castSettings:set': { req: ScenePlusCastSettings; res: void }
+  'scenePlus:exportJson': { req: { presetId: number }; res: { saved: boolean } }
+  'scenePlus:exportZip': { req: { presetId: number }; res: { count: number } }
+  'scenePlus:importJson': { req: void; res: { presetId: number | null; count: number } }
+  'scenePlus:scenes:list': { req: { presetId: number }; res: { items: ScenePlusScene[] } }
+  'scenePlus:scenes:create': { req: { presetId: number; name: string }; res: { id: number } }
+  'scenePlus:scenes:update': {
+    req: {
+      id: number
+      patch: Partial<
+        Pick<
+          ScenePlusScene,
+          'name' | 'prompt' | 'negativePrompt' | 'width' | 'height' | 'useCoords' | 'slots'
+        >
+      >
+    }
+    res: void
+  }
+  'scenePlus:scenes:duplicate': { req: { id: number }; res: { id: number } }
+  'scenePlus:scenes:delete': { req: { id: number }; res: void }
+  'scenePlus:scenes:reorder': { req: { ids: number[] }; res: void }
+  'scenePlus:scenes:setReserve': { req: { id: number; count: number }; res: void }
+  'scenePlus:scenes:images': {
+    req: { sceneId: number; limit: number; offset: number; favoritesOnly?: boolean }
+    res: { items: SceneImage[]; total: number }
+  }
+  'scenePlus:reservedTotal': { req: void; res: { total: number } }
+  'scenePlus:enqueueReserved': {
+    req: { request: GenerationRequest; seedLocked: boolean }
+    res: { ids: string[] }
+  }
+  'scenePlus:generateOne': {
+    req: { sceneId: number; request: GenerationRequest }
+    res: { ids: string[] }
+  }
+  'scenePlus:casts:list': { req: void; res: { items: ScenePlusCast[] } }
+  'scenePlus:casts:create': {
+    req: Omit<ScenePlusCast, 'id'>
+    res: { id: number }
+  }
+  'scenePlus:casts:update': {
+    req: { id: number; patch: Partial<Omit<ScenePlusCast, 'id'>> }
+    res: void
+  }
+  'scenePlus:casts:delete': { req: { id: number }; res: void }
+  'scenePlus:casts:reorder': { req: { ids: number[] }; res: void }
+  'scenePlus:castGroups:list': { req: void; res: { items: ScenePlusCastGroup[] } }
+  'scenePlus:castGroups:create': {
+    req: Omit<ScenePlusCastGroup, 'id'>
+    res: { id: number }
+  }
+  'scenePlus:castGroups:update': {
+    req: { id: number; patch: Partial<Omit<ScenePlusCastGroup, 'id'>> }
+    res: void
+  }
+  'scenePlus:castGroups:delete': { req: { id: number }; res: void }
   'scenes:update': {
     req: {
       id: number
@@ -750,6 +878,7 @@ export interface IpcEventMap {
   }
   /** 씬에 새 이미지가 생성됨 (목록/상세 갱신). filePath로 카드 즉시 낙관적 갱신 */
   'scenes:changed': { sceneId: number; filePath: string }
+  'scenePlus:changed': { sceneId: number; filePath: string }
   /** 바이브 인코딩 완료 — 카드의 인코딩 표시 갱신용 */
   'vibes:encoded': Record<string, never>
   /** 자동 업데이트 상태 (GitHub release) */

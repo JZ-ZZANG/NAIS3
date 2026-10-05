@@ -7,6 +7,7 @@ import { useGenerationStore } from './generation-store'
 import { useLayoutStore } from './layout-store'
 import { useCharRefsStore, useVibesStore } from './refs-store'
 import { useScenesStore } from './scenes-store'
+import { useScenePlusStore } from './scene-plus-store'
 import { toast } from './toast-store'
 
 export type ShortcutAction =
@@ -98,6 +99,9 @@ function runAction(action: ShortcutAction): void {
         // 모든 프리셋의 예약 총합 기준 (씬 생성 버튼과 동일)
         if (useScenesStore.getState().reservedTotal > 0)
           void useScenesStore.getState().generateReserved()
+      } else if (layout.centerMode === 'scene-plus') {
+        if (useScenePlusStore.getState().reservedTotal > 0)
+          void useScenePlusStore.getState().generateReserved()
       } else {
         void useGenerationStore.getState().generate()
       }

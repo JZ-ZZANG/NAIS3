@@ -26,6 +26,16 @@ const TABLES = [
   'scene_character_addition_prompts',
   'scene_character_addition_charrefs',
   'scene_character_addition_vibes',
+  'scene_plus_presets',
+  'scene_plus_scenes',
+  'scene_plus_slots',
+  'scene_plus_casts',
+  'scene_plus_cast_charrefs',
+  'scene_plus_cast_vibes',
+  'scene_plus_cast_groups',
+  'scene_plus_cast_group_members',
+  'scene_plus_cast_settings',
+  'scene_plus_cast_slots',
   'prompt_presets'
 ] as const
 
