@@ -2,6 +2,7 @@ import {
   CheckSquare,
   Copy,
   Crosshair,
+  Dices,
   FolderPlus,
   ImageOff,
   ImagePlus,
@@ -21,7 +22,8 @@ import {
   characterCenterForModel,
   isV5Model,
   LEGACY_CHARACTER_POSITION_GRID,
-  modelCapabilities
+  modelCapabilities,
+  promptTokenLimit
 } from '@shared/nai-models'
 import { cn } from '../lib/utils'
 import { useT } from '../lib/i18n'
@@ -29,6 +31,7 @@ import { applyClickSelection, useSelectAllShortcut } from '../lib/edit-selection
 import { buildDisplayRows } from '../lib/folder-list'
 import { useCharactersStore } from '../stores/characters-store'
 import { useGenerationStore } from '../stores/generation-store'
+import { toast } from '../stores/toast-store'
 import { askConfirm, askText } from '../stores/dialog-store'
 import { FolderListView } from './folder-list-view'
 import { PromptEditor } from './prompt-editor'
@@ -153,6 +156,7 @@ export function CharacterOverlay(): React.JSX.Element {
   const createCard = useCharactersStore((s) => s.createCard)
   const updateCard = useCharactersStore((s) => s.updateCard)
   const disableAll = useCharactersStore((s) => s.disableAll)
+  const activateRandom = useCharactersStore((s) => s.activateRandom)
   const removeCard = useCharactersStore((s) => s.removeCard)
   const duplicateCard = useCharactersStore((s) => s.duplicateCard)
   const pickThumbnail = useCharactersStore((s) => s.pickThumbnail)
@@ -167,16 +171,18 @@ export function CharacterOverlay(): React.JSX.Element {
   const model = useGenerationStore((s) => s.request.model)
   const patch = useGenerationStore((s) => s.patchRequest)
   const maxCharacters = modelCapabilities(model).maxCharacters
-
+  const tokenLimit = promptTokenLimit(model)
   const [search, setSearch] = useState('')
   const [expandedId, setExpandedId] = useState<number | null>(null)
-  // 편집 모드 — 다중 선택 (일반 클릭=교체, Ctrl=토글, Shift=구간, Ctrl+A=전체)
-  const [editMode, setEditMode] = useState(false)
+  // 편집/랜덤 후보 모드 — 클릭=토글, Shift=구간, Ctrl+A=현재 목록 전체
+  const [selectionMode, setSelectionMode] = useState<'edit' | 'random' | null>(null)
+  const editMode = selectionMode === 'edit'
+  const randomMode = selectionMode === 'random'
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [bulkPromptOpen, setBulkPromptOpen] = useState(false)
   const anchorRef = useRef<number | null>(null)
-  const toggleEditMode = (): void => {
-    setEditMode((v) => !v)
+  const toggleSelectionMode = (mode: 'edit' | 'random'): void => {
+    setSelectionMode((current) => (current === mode ? null : mode))
     setSelected(new Set())
     setExpandedId(null)
     anchorRef.current = null
@@ -213,15 +219,28 @@ export function CharacterOverlay(): React.JSX.Element {
   }, [folders, items, searching, search])
 
   const enabledCount = items.filter((c) => c.enabled && c.prompt.trim()).length
-
   // 화면에 보이는 순서의 카드 id들 (Shift 구간/Ctrl+A 기준)
   const visibleIds = useMemo(
     () => rows.flatMap((r) => (r.type === 'item' && !r.hidden ? [r.item.id] : [])),
     [rows]
   )
-  useSelectAllShortcut(editMode, () => setSelected(new Set(visibleIds)))
-  const selectItem = (id: number, e: React.MouseEvent): void =>
-    setSelected((prev) => applyClickSelection(prev, visibleIds, id, e, anchorRef))
+  const usableIds = useMemo(
+    () => new Set(items.filter((item) => item.prompt.trim()).map((item) => item.id)),
+    [items]
+  )
+  const selectableIds = randomMode ? visibleIds.filter((id) => usableIds.has(id)) : visibleIds
+  useSelectAllShortcut(selectionMode !== null, () => setSelected(new Set(selectableIds)))
+  const selectItem = (id: number, e: React.MouseEvent): void => {
+    if (!selectableIds.includes(id)) return
+    setSelected((prev) => applyClickSelection(prev, selectableIds, id, e, anchorRef))
+  }
+
+  const callRandomCharacter = (): void => {
+    const picked = activateRandom(selected)
+    if (!picked) return
+    const label = picked.name.trim() || picked.prompt.trim().slice(0, 40)
+    toast(t('ui.randomlyActivatedValue', label), 'success')
+  }
 
   const bulkDelete = async (): Promise<void> => {
     if (
@@ -240,7 +259,7 @@ export function CharacterOverlay(): React.JSX.Element {
     setSelected(new Set())
   }
 
-  // 기본 프롬프트 + 캐릭터 프롬프트가 512 토큰을 합산 공유 (공홈 실측)
+  // 기본 프롬프트 + 캐릭터 프롬프트가 모델별 토큰 한도를 합산 공유 (공홈 실측)
   const basePrompt = useGenerationStore((s) => s.request.prompt)
   const positiveTexts = useMemo(
     () =>
@@ -252,25 +271,38 @@ export function CharacterOverlay(): React.JSX.Element {
   )
   const [charTokens, setCharTokens] = useState<number | null>(null)
   useEffect(() => {
-    if (isV5Model(model) || positiveTexts.length === 0) {
+    if (positiveTexts.length === 0) {
       const timer = setTimeout(() => setCharTokens(null))
       return () => clearTimeout(timer)
     }
+    let cancelled = false
     const timer = setTimeout(() => {
-      void window.nais.invoke('tokens:count', { texts: positiveTexts }).then(({ counts }) => {
-        // 공홈은 캡션별 EOS를 각각 포함해 그대로 합산
-        setCharTokens(counts.reduce((a, b) => a + b, 0))
-      })
+      void window.nais
+        .invoke('tokens:count', { texts: positiveTexts, model })
+        .then(({ counts }) => {
+          if (!cancelled) setCharTokens(counts.reduce((a, b) => a + b, 0))
+        })
+        .catch(() => {
+          if (!cancelled) setCharTokens(null)
+        })
     }, 300)
-    return () => clearTimeout(timer)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
   }, [model, positiveTexts])
 
-  // 편집 모드 헤더 — 선택 전용 행 (스위치/좌표 등 상호작용 제거)
-  const renderHeaderEdit = (char: CharacterCard): React.ReactNode => {
+  // 선택 모드 헤더 — 스위치/좌표 등 편집 상호작용 제거
+  const renderHeaderSelection = (char: CharacterCard): React.ReactNode => {
     const checked = selected.has(char.id)
+    const unavailable = randomMode && !char.prompt.trim()
     return (
       <div
-        className="flex h-10 cursor-pointer select-none items-center gap-2 px-2"
+        className={cn(
+          'flex h-10 select-none items-center gap-2 px-2',
+          unavailable ? 'cursor-not-allowed opacity-45' : 'cursor-pointer'
+        )}
+        title={unavailable ? t('ui.emptyPromptCharactersCannotBeSelected') : undefined}
         onClick={(e) => selectItem(char.id, e)}
       >
         <span
@@ -421,6 +453,8 @@ export function CharacterOverlay(): React.JSX.Element {
       <PromptEditor
         className="h-40 max-h-[520px] min-h-20 resize-y bg-surface-2"
         value={char.prompt}
+        tokenModel={model}
+        tokenLimit={tokenLimit}
         placeholder="girl, ..."
         onValueChange={(v) => updateCard(char.id, { prompt: v })}
       />
@@ -428,6 +462,8 @@ export function CharacterOverlay(): React.JSX.Element {
         negative
         className="h-24 max-h-96 min-h-14 resize-y bg-surface-2"
         value={char.negativePrompt}
+        tokenModel={model}
+        tokenLimit={tokenLimit}
         placeholder={t('ui.characterNegative')}
         onValueChange={(v) => updateCard(char.id, { negativePrompt: v })}
       />
@@ -471,15 +507,15 @@ export function CharacterOverlay(): React.JSX.Element {
             {t('ui.disableAll')}
           </Button>
         )}
-        {!isV5Model(model) && charTokens !== null && (
+        {charTokens !== null && (
           <span
             className={cn(
               'font-mono text-[10.5px]',
-              charTokens > 512 ? 'text-danger' : 'text-faint'
+              charTokens > tokenLimit ? 'text-danger' : 'text-faint'
             )}
-            title={t('ui.basePromptCharacterPromptsCombinedShared512Tokens')}
+            title={t('ui.basePromptCharacterPromptsCombinedSharedTokenLimit', tokenLimit)}
           >
-            {charTokens}/512
+            {charTokens}/{tokenLimit}
           </span>
         )}
         <div className="flex-1" />
@@ -488,7 +524,11 @@ export function CharacterOverlay(): React.JSX.Element {
           title={t('ui.offAiSChoiceNaiDecidesPositions')}
         >
           {t('ui.setPositions')}
-          <Switch checked={useCoords} onCheckedChange={(v) => patch({ useCoords: v })} />
+          <Switch
+            aria-label={t('ui.setPositions')}
+            checked={useCoords}
+            onCheckedChange={(enabled) => patch({ useCoords: enabled })}
+          />
         </label>
       </div>
 
@@ -512,9 +552,17 @@ export function CharacterOverlay(): React.JSX.Element {
         </Button>
         <Button
           size="sm"
+          variant={randomMode ? 'accent' : 'ghost'}
+          title={t('ui.randomCharacter')}
+          onClick={() => toggleSelectionMode('random')}
+        >
+          <Dices size={14} />
+        </Button>
+        <Button
+          size="sm"
           variant={editMode ? 'accent' : 'ghost'}
           title={t('ui.editModeMultiSelectClickToToggleShiftClickForRangeCtrlAForAll')}
-          onClick={toggleEditMode}
+          onClick={() => toggleSelectionMode('edit')}
         >
           <CheckSquare size={14} />
         </Button>
@@ -527,6 +575,37 @@ export function CharacterOverlay(): React.JSX.Element {
           <Plus size={13} /> {t('ui.character')}
         </Button>
       </div>
+
+      {/* 랜덤 후보 선택 바 — 선택 범위를 유지한 채 여러 번 다시 뽑을 수 있다 */}
+      {randomMode && (
+        <div className="flex flex-wrap items-center gap-1 border-b border-line pb-2 text-[12px]">
+          <span className="text-muted">
+            {t('ui.chooseRandomCharacterCandidatesShiftClickToSelectARange')}
+          </span>
+          <span className="text-muted">{t('ui.valueItems', selected.size)}</span>
+          <Button size="sm" variant="ghost" onClick={() => setSelected(new Set(selectableIds))}>
+            {t('ui.all')}
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={selected.size === 0}
+            onClick={() => setSelected(new Set())}
+          >
+            {t('ui.clear')}
+          </Button>
+          <div className="flex-1" />
+          <Button
+            size="sm"
+            variant="accent"
+            className="gap-1"
+            disabled={selected.size === 0}
+            onClick={callRandomCharacter}
+          >
+            <Dices size={12} /> {t('ui.randomCall')}
+          </Button>
+        </div>
+      )}
 
       {/* 편집 모드 일괄 작업 바 — 검색 아래 */}
       {editMode && (
@@ -578,9 +657,9 @@ export function CharacterOverlay(): React.JSX.Element {
         <FolderListView
           rows={rows}
           searching={searching}
-          expandedId={editMode ? null : expandedId}
-          // 헤더가 item 밖 상태(좌표 토글/모델/편집 선택)에 의존 — 바뀌면 카드 리렌더
-          renderKey={editMode ? selected : `${useCoords}:${model}`}
+          expandedId={selectionMode ? null : expandedId}
+          // 헤더가 item 밖 상태(좌표 토글/편집 선택)에 의존 — 바뀌면 카드 리렌더
+          renderKey={`${model}:${useCoords}:${selectionMode ?? ''}:${Array.from(selected).join(',')}`}
           folderActions={{
             rename: renameFolder,
             toggleCollapse,
@@ -592,12 +671,12 @@ export function CharacterOverlay(): React.JSX.Element {
           itemClassName={(char) =>
             cn(
               'transition-colors hover:border-muted/60', // F2: 호버 강조
-              editMode
+              selectionMode
                 ? selected.has(char.id) && 'border-accent ring-1 ring-accent/40'
                 : char.enabled && 'border-accent/60 bg-accent-soft' // F3: 활성 강조
             )
           }
-          renderHeader={editMode ? renderHeaderEdit : renderHeader}
+          renderHeader={selectionMode ? renderHeaderSelection : renderHeader}
           renderExpanded={renderExpanded}
           itemContextMenu={(char) => (
             <>

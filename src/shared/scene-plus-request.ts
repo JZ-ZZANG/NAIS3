@@ -16,22 +16,17 @@ export function applyScenePlusRequest(
   if (scene.useCoords && slots.some((slot) => !slot.center)) {
     throw new Error('위치 설정을 켠 씬은 모든 캐릭터 슬롯의 위치가 필요합니다.')
   }
-  const pairCount = Math.min(slots.length, actors.length)
-  const characterPrompts = Array.from(
-    { length: pairCount },
-    (_, i): CharacterPromptInput | null => {
+  const characterPrompts = slots
+    .map((slot, i): CharacterPromptInput => {
       const actor = actors[i]
-      if (!actor?.prompt.trim()) return null
       return {
         ...actor,
-        prompt: appendPrompt(actor.prompt, slots[i].prompt),
-        negativePrompt: appendPrompt(actor.negativePrompt, slots[i].negativePrompt),
-        ...(scene.useCoords ? { center: slots[i].center } : { center: undefined }),
+        prompt: appendPrompt(actor?.prompt ?? '', slot.prompt),
+        negativePrompt: appendPrompt(actor?.negativePrompt ?? '', slot.negativePrompt),
+        center: scene.useCoords ? slot.center : undefined,
         enabled: true
       }
-    }
-  )
-    .filter((actor): actor is CharacterPromptInput => actor !== null)
+    })
     .slice(0, modelCapabilities(base.model).maxCharacters)
   return {
     ...base,

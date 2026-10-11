@@ -81,9 +81,83 @@ describe('scene mode plus request composition', () => {
       null,
       { prompt: 'bob', negativePrompt: '', enabled: true }
     ])
-    expect(result.characterPrompts).toHaveLength(1)
-    expect(result.characterPrompts[0].prompt).toBe('bob, sitting')
-    expect(result.characterPrompts[0].center).toEqual({ x: 0.8, y: 0.5 })
+    expect(result.characterPrompts).toEqual([
+      {
+        prompt: 'smiling',
+        negativePrompt: 'crying',
+        enabled: true,
+        center: { x: 0.2, y: 0.4 }
+      },
+      {
+        prompt: 'bob, sitting',
+        negativePrompt: '',
+        enabled: true,
+        center: { x: 0.8, y: 0.5 }
+      }
+    ])
+  })
+
+  it('keeps every scene slot when fewer casts are assigned', () => {
+    const result = applyScenePlusRequest(request, scene, [
+      { prompt: 'alice', negativePrompt: 'red hair', enabled: true }
+    ])
+    expect(result.characterPrompts).toHaveLength(2)
+    expect(result.characterPrompts[0].prompt).toBe('alice, smiling')
+    expect(result.characterPrompts[1]).toEqual({
+      prompt: 'sitting',
+      negativePrompt: '',
+      enabled: true,
+      center: { x: 0.8, y: 0.5 }
+    })
+  })
+
+  it('uses scene prompts and positions when no casts are assigned', () => {
+    const result = applyScenePlusRequest(request, scene)
+    expect(result.characterPrompts).toEqual(
+      scene.slots.map(({ prompt, negativePrompt, center }) => ({
+        prompt,
+        negativePrompt,
+        center,
+        enabled: true
+      }))
+    )
+  })
+
+  it('keeps an unassigned slot even when its prompt is empty', () => {
+    const result = applyScenePlusRequest(request, {
+      ...scene,
+      slots: [scene.slots[0], { ...scene.slots[1], prompt: '', negativePrompt: 'hat' }]
+    })
+    expect(result.characterPrompts).toHaveLength(2)
+    expect(result.characterPrompts[1]).toEqual({
+      prompt: '',
+      negativePrompt: 'hat',
+      center: { x: 0.8, y: 0.5 },
+      enabled: true
+    })
+  })
+
+  it('clears cast positions when scene positioning is disabled', () => {
+    const result = applyScenePlusRequest(request, { ...scene, useCoords: false }, [
+      { prompt: 'alice', negativePrompt: '', center: { x: 0.1, y: 0.1 }, enabled: true }
+    ])
+    expect(result.characterPrompts).toHaveLength(2)
+    expect(result.characterPrompts.every((character) => character.center === undefined)).toBe(true)
+    expect(result.useCoords).toBe(false)
+  })
+
+  it.each([
+    ['nai-diffusion-4-5-full', 6],
+    ['nai-diffusion-5-curated', 32]
+  ])('keeps scene slots up to the %s model limit', (model, limit) => {
+    const result = applyScenePlusRequest(
+      { ...request, model },
+      {
+        ...scene,
+        slots: Array.from({ length: 33 }, (_, i) => ({ ...scene.slots[0], index: i + 1 }))
+      }
+    )
+    expect(result.characterPrompts).toHaveLength(limit)
   })
 
   it('requires every slot position when scene positioning is enabled', () => {

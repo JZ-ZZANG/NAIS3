@@ -5,6 +5,7 @@ import { join } from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { backupNow, closeDb, getDb, initDb } from '../src/main/db'
 import { migrations } from '../src/main/db/migrations'
+import { ensureSceneAdditionSchema } from '../src/main/db/scene-addition-schema'
 import { resolveInitialLanguage } from '../src/main/i18n'
 
 const environment = vi.hoisted(() => ({ directory: '', locale: 'zh-CN' }))
@@ -129,6 +130,28 @@ afterEach(() => {
 })
 
 describe('existing workspace migration', () => {
+  it('runs the upstream v17 fix when opening an older custom v17 database', () => {
+    const old = seedLegacy()
+    ensureSceneAdditionSchema(old)
+    old.exec('CREATE TABLE scene_sequence_entries (id INTEGER PRIMARY KEY, name TEXT NOT NULL)')
+    old.prepare('INSERT INTO scene_sequence_entries (id, name) VALUES (1, ?)').run('saved sequence')
+    old.prepare('INSERT INTO scene_character_additions (scene_id) VALUES (1)').run()
+    old.pragma('foreign_keys = OFF')
+    old.prepare('UPDATE character_prompts SET folder_id = 999 WHERE id = 1').run()
+    old.close()
+    expect(initDb().version).toBe(migrations.length)
+    expect(
+      getDb().prepare('SELECT folder_id FROM character_prompts WHERE id = 1').pluck().get()
+    ).toBeNull()
+    expect(
+      getDb().prepare('SELECT name FROM scene_sequence_entries WHERE id = 1').pluck().get()
+    ).toBe('saved sequence')
+    expect(getDb().prepare('SELECT scene_id FROM scene_character_additions').pluck().all()).toEqual(
+      [1]
+    )
+    withBackup((backup) => expect(backup.pragma('user_version', { simple: true })).toBe(17))
+  })
+
   it('preserves existing data, creates a standalone old-version backup and does not reseed on reopen', () => {
     const old = seedLegacy({ language: 'en' })
     const before = snapshot(old)

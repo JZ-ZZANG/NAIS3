@@ -41,7 +41,7 @@ export function initDb(): { version: number; path: string; isNewDatabase: boolea
   let current = db.pragma('user_version', { simple: true }) as number
   const target = migrations.length
 
-  if (current === 17 && target === 16 && isLegacyCustomV17(db)) {
+  if (current === 17 && target >= 16 && isLegacyCustomV17(db)) {
     if (existsSync(path)) backupBeforeMigration(current)
     db.pragma('user_version = 16')
     current = 16

@@ -697,9 +697,10 @@ function persistGroups(): void {
 
 /** 출연 목록 복원 — SceneMode 마운트 시 1회 */
 let castsLoaded = false
-export async function loadCasts(): Promise<void> {
-  if (castsLoaded) return
+export async function loadCasts(force = false): Promise<void> {
+  if (castsLoaded && !force) return
   castsLoaded = true
+  if (force) useScenesStore.setState({ casts: [], groups: [] })
   const { value } = await window.nais.invoke('settings:get', { key: 'scene_casts' })
   if (value) {
     try {

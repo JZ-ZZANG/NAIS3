@@ -15,9 +15,11 @@ import { ScenePlusMode } from './components/scene-plus-mode'
 import { Titlebar } from './components/titlebar'
 import { SettingsDialog } from './components/token-dialog'
 import { TextPromptHost } from './components/text-prompt-host'
+import { FragmentEditorDialog } from './components/fragment-editor-dialog'
 import { WebSearchMode } from './components/web-search-mode'
 import { TooltipProvider } from './components/ui/tooltip'
 import { useCharactersStore } from './stores/characters-store'
+import { useDirectorStore } from './stores/director-store'
 import { useFragmentsStore } from './stores/fragments-store'
 import { useCharRefsStore, useVibesStore } from './stores/refs-store'
 import { bindGenerationEvents, useGenerationStore } from './stores/generation-store'
@@ -69,7 +71,8 @@ export default function App(): React.JSX.Element {
         useFragmentsStore.getState().load(),
         useVibesStore.getState().load(),
         useCharRefsStore.getState().load(),
-        useShortcutsStore.getState().hydrate()
+        useShortcutsStore.getState().hydrate(),
+        useDirectorStore.getState().hydrate()
       ])
       // 스플래시가 너무 순식간에 사라지지 않게 최소 표시 시간 확보
       setTimeout(() => setReady(true), 350)
@@ -160,6 +163,7 @@ export default function App(): React.JSX.Element {
         </div>
         <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
         <TextPromptHost />
+        <FragmentEditorDialog />
         <InpaintHost />
         <MetadataDialog />
         <ArtistTagsDialog />

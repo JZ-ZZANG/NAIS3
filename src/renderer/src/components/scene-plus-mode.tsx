@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   ArrowLeft,
   CalendarPlus,
@@ -11,7 +11,6 @@ import {
   ImageOff,
   Loader2,
   Minus,
-  MoreVertical,
   Pencil,
   Play,
   Plus,
@@ -29,6 +28,8 @@ import { useGenerationStore } from '../stores/generation-store'
 import { useScenePlusStore } from '../stores/scene-plus-store'
 import { imageUrl } from '../lib/constants'
 import { cn } from '../lib/utils'
+import { useT } from '../lib/i18n'
+import { applyClickSelection } from '../lib/edit-selection'
 import { askConfirm, askText } from '../stores/dialog-store'
 import { Button } from './ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from './ui/dialog'
@@ -36,6 +37,8 @@ import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
 import { Switch } from './ui/switch'
 import { ResolutionPicker } from './resolution-picker'
 import { ReserveCount } from './reserve-count'
+import { CARD_ASPECT, SceneCardFrame } from './scene-card-frame'
+import { SortableSceneGrid } from './sortable-scene-grid'
 import { PromptEditor } from './prompt-editor'
 import { ImageContextMenu } from './image-context-menu'
 import { Lightbox } from './lightbox'
@@ -245,6 +248,7 @@ function SceneSlotPosition({
 }
 
 function SceneEditor({ scene }: { scene: ScenePlusScene }): React.JSX.Element {
+  const t = useT()
   const update = useScenePlusStore((state) => state.updateScene)
   const selectScene = useScenePlusStore((state) => state.selectScene)
   const generateOne = useScenePlusStore((state) => state.generateOne)
@@ -332,6 +336,7 @@ function SceneEditor({ scene }: { scene: ScenePlusScene }): React.JSX.Element {
           />
           <button
             className="grid size-6 place-items-center rounded-full hover:bg-surface-2"
+            aria-label={t('ui.increaseSceneQueue', scene.name)}
             onClick={() => void setReserve(scene.id, scene.reserveCount + batchCount)}
           >
             <Plus size={13} />
@@ -585,8 +590,6 @@ function SceneEditor({ scene }: { scene: ScenePlusScene }): React.JSX.Element {
   )
 }
 
-const CARD_ASPECT = { portrait: '832 / 1216', landscape: '1216 / 832', square: '1 / 1' }
-
 function SceneCard({
   scene,
   orientation,
@@ -598,8 +601,9 @@ function SceneCard({
   orientation: keyof typeof CARD_ASPECT
   editMode: boolean
   selected: boolean
-  onToggle: () => void
+  onToggle: (event: React.MouseEvent<HTMLDivElement>) => void
 }): React.JSX.Element {
+  const t = useT()
   const selectScene = useScenePlusStore((state) => state.selectScene)
   const updateScene = useScenePlusStore((state) => state.updateScene)
   const duplicateScene = useScenePlusStore((state) => state.duplicateScene)
@@ -620,11 +624,15 @@ function SceneCard({
           ? imageUrl(scene.thumbnailPath)
           : null
 
+  const renameScene = async (): Promise<void> => {
+    const name = await askText(t('ui.sceneName'), scene.name)
+    if (name) void updateScene(scene.id, { name })
+  }
   const remove = async (): Promise<void> => {
     if (
-      await askConfirm('씬 삭제', {
-        message: `'${scene.name}' 씬을 삭제합니다.`,
-        confirmLabel: '삭제',
+      await askConfirm(t('ui.deleteScene'), {
+        message: t('ui.deletesTheSceneValue', scene.name),
+        confirmLabel: t('ui.delete'),
         danger: true
       })
     )
@@ -632,13 +640,34 @@ function SceneCard({
   }
 
   return (
-    <div
-      className={cn(
-        'group relative overflow-hidden rounded-lg border bg-surface-2 transition',
-        editMode && selected ? 'border-accent ring-2 ring-accent/40' : 'border-line'
-      )}
-      style={{ aspectRatio: CARD_ASPECT[orientation] }}
-      onClick={() => (editMode ? onToggle() : selectScene(scene.id))}
+    <SceneCardFrame
+      id={scene.id}
+      name={scene.name}
+      orientation={orientation}
+      editMode={editMode}
+      selected={selected}
+      actions={[
+        {
+          id: 'rename',
+          icon: <Pencil size={13} />,
+          label: t('ui.rename'),
+          onSelect: () => void renameScene()
+        },
+        {
+          id: 'duplicate',
+          icon: <Copy size={13} />,
+          label: t('ui.duplicate'),
+          onSelect: () => void duplicateScene(scene.id)
+        },
+        {
+          id: 'delete',
+          icon: <Trash2 size={13} />,
+          label: t('ui.delete'),
+          danger: true,
+          onSelect: () => void remove()
+        }
+      ]}
+      onClick={(event) => (editMode ? onToggle(event) : selectScene(scene.id))}
     >
       {src ? (
         <img src={src} alt="" draggable={false} className="h-full w-full object-cover" />
@@ -652,67 +681,33 @@ function SceneCard({
           {scene.reserveCount}
         </span>
       )}
-      {editMode ? (
-        <span
-          className={cn(
-            'absolute right-1.5 top-1.5 grid size-5 place-items-center rounded border-2 transition',
-            selected ? 'border-accent bg-accent text-white' : 'border-white/80 bg-black/30'
-          )}
-        >
-          {selected && <span className="text-[11px] leading-none">✓</span>}
-        </span>
-      ) : (
-        <Popover>
-          <PopoverTrigger asChild>
-            <button
-              className="absolute right-1.5 top-1.5 grid size-6 place-items-center rounded-full bg-black/55 text-white opacity-0 transition hover:bg-black/70 group-hover:opacity-100"
-              aria-label={`${scene.name} 메뉴`}
-              onClick={(event) => event.stopPropagation()}
-            >
-              <MoreVertical size={14} />
-            </button>
-          </PopoverTrigger>
-          <PopoverContent
-            align="end"
-            className="w-40 p-1"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <MenuItem
-              icon={<Pencil size={13} />}
-              label="이름 변경"
-              onClick={async () => {
-                const name = await askText('씬 이름', scene.name)
-                if (name) void updateScene(scene.id, { name })
-              }}
-            />
-            <MenuItem
-              icon={<Copy size={13} />}
-              label="복제"
-              onClick={() => void duplicateScene(scene.id)}
-            />
-            <MenuItem
-              icon={<Trash2 size={13} />}
-              label="삭제"
-              danger
-              onClick={() => void remove()}
-            />
-          </PopoverContent>
-        </Popover>
-      )}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent px-2 pb-1.5 pt-7">
         <div className="pointer-events-auto flex items-end justify-between gap-1">
           <div className="min-w-0">
-            <div className="truncate text-[13px] font-semibold text-white drop-shadow">
-              {scene.name}
-            </div>
+            {editMode ? (
+              <input
+                className="w-full truncate rounded bg-white/15 px-1 py-0.5 text-[13px] font-medium text-white outline-none placeholder:text-white/50 focus:bg-white/25"
+                value={scene.name}
+                aria-label={t('ui.sceneName')}
+                onClick={(event) => event.stopPropagation()}
+                onPointerDown={(event) => event.stopPropagation()}
+                onChange={(event) => void updateScene(scene.id, { name: event.target.value })}
+              />
+            ) : (
+              <div className="truncate text-[13px] font-semibold text-white drop-shadow">
+                {scene.name}
+              </div>
+            )}
           </div>
           <div
             className="flex shrink-0 items-center gap-0.5 rounded-full bg-black/55 p-0.5"
             onClick={(event) => event.stopPropagation()}
+            onPointerDown={(event) => event.stopPropagation()}
           >
             <button
               className="grid size-5 place-items-center rounded-full text-white hover:bg-white/20 disabled:opacity-30"
               disabled={scene.reserveCount === 0}
+              aria-label={t('ui.decreaseSceneQueue', scene.name)}
               onClick={() => void setReserve(scene.id, scene.reserveCount - batchCount)}
             >
               <Minus size={13} />
@@ -725,6 +720,7 @@ function SceneCard({
             />
             <button
               className="grid size-5 place-items-center rounded-full text-white hover:bg-white/20"
+              aria-label={t('ui.increaseSceneQueue', scene.name)}
               onClick={() => void setReserve(scene.id, scene.reserveCount + batchCount)}
             >
               <Plus size={13} />
@@ -732,34 +728,11 @@ function SceneCard({
           </div>
         </div>
       </div>
-    </div>
+    </SceneCardFrame>
   )
 }
 
-function MenuItem({
-  icon,
-  label,
-  danger,
-  onClick
-}: {
-  icon: React.ReactNode
-  label: string
-  danger?: boolean
-  onClick: () => void
-}): React.JSX.Element {
-  return (
-    <button
-      className={cn(
-        'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-surface-2',
-        danger && 'text-danger'
-      )}
-      onClick={onClick}
-    >
-      {icon}
-      {label}
-    </button>
-  )
-}
+const savedGridScroll = new Map<number, number>()
 
 export function ScenePlusMode(): React.JSX.Element {
   const store = useScenePlusStore()
@@ -770,6 +743,8 @@ export function ScenePlusMode(): React.JSX.Element {
   const setOrientation = useScenePlusStore((state) => state.setCardOrientation)
   const [editMode, setEditMode] = useState(false)
   const [selection, setSelection] = useState<Set<number>>(new Set())
+  const selectionAnchor = useRef<number | null>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
   const [castManagerOpen, setCastManagerOpen] = useState(false)
   const [castAssignmentOpen, setCastAssignmentOpen] = useState(false)
   const batchCount = useGenerationStore((state) => state.batchCount)
@@ -777,6 +752,21 @@ export function ScenePlusMode(): React.JSX.Element {
   useEffect(() => {
     void load()
   }, [load])
+
+  useEffect(
+    () =>
+      useScenePlusStore.subscribe((state, previous) => {
+        if (state.activePresetId === previous.activePresetId) return
+        setSelection(new Set())
+        selectionAnchor.current = null
+      }),
+    []
+  )
+
+  useLayoutEffect(() => {
+    if (scrollRef.current && store.activePresetId != null)
+      scrollRef.current.scrollTop = savedGridScroll.get(store.activePresetId) ?? 0
+  }, [store.selectedSceneId, store.activePresetId, store.scenes.length])
 
   const selected = store.scenes.find((item) => item.id === store.selectedSceneId)
   const assignmentSummary = [
@@ -799,13 +789,16 @@ export function ScenePlusMode(): React.JSX.Element {
 
   if (selected) return <SceneEditor scene={selected} />
 
-  const toggleSelected = (id: number): void => {
-    setSelection((current) => {
-      const next = new Set(current)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
+  const toggleSelected = (id: number, event: React.MouseEvent<HTMLDivElement>): void => {
+    setSelection((current) =>
+      applyClickSelection(
+        current,
+        store.scenes.map((scene) => scene.id),
+        id,
+        event,
+        selectionAnchor
+      )
+    )
   }
 
   const adjustSelected = (delta: number): void => {
@@ -890,6 +883,7 @@ export function ScenePlusMode(): React.JSX.Element {
             onClick={() => {
               setEditMode(!editMode)
               setSelection(new Set())
+              selectionAnchor.current = null
             }}
           >
             <Pencil size={16} />
@@ -994,10 +988,19 @@ export function ScenePlusMode(): React.JSX.Element {
           </div>
         )}
 
-        <div className="min-h-0 flex-1 overflow-y-auto p-3 no-scrollbar">
-          <div
-            className="grid gap-3"
-            style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
+        <div
+          ref={scrollRef}
+          onScroll={(event) => {
+            if (store.activePresetId != null)
+              savedGridScroll.set(store.activePresetId, event.currentTarget.scrollTop)
+          }}
+          className="min-h-0 flex-1 overflow-y-auto p-3 no-scrollbar"
+        >
+          <SortableSceneGrid
+            scenes={store.scenes}
+            columns={columns}
+            orientation={orientation}
+            onReorder={(ids) => void store.reorderScenes(ids)}
           >
             {store.scenes.map((scene) => (
               <SceneCard
@@ -1006,7 +1009,7 @@ export function ScenePlusMode(): React.JSX.Element {
                 orientation={orientation}
                 editMode={editMode}
                 selected={selection.has(scene.id)}
-                onToggle={() => toggleSelected(scene.id)}
+                onToggle={(event) => toggleSelected(scene.id, event)}
               />
             ))}
             <button
@@ -1017,7 +1020,7 @@ export function ScenePlusMode(): React.JSX.Element {
               <Plus size={22} />
               <span className="text-[12px]">씬 추가</span>
             </button>
-          </div>
+          </SortableSceneGrid>
           {!store.scenes.length && (
             <p className="mt-6 text-center text-[13px] text-faint">
               프롬프트와 해상도를 저장할 씬을 추가하세요.

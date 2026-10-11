@@ -5,6 +5,7 @@ import type {
 } from '../../shared/types'
 import { getDb } from '../db'
 import { getSetting } from '../db/settings'
+import { modelCapabilities } from '../../shared/nai-models'
 
 type LinkKind = 'prompts' | 'charrefs' | 'vibes'
 
@@ -123,7 +124,7 @@ export function applySceneCharacterAddition(request: GenerationRequest): Generat
     characterPrompts: [
       ...request.characterPrompts,
       ...characterPromptsByIds(addition.characterPromptIds)
-    ].slice(0, 6),
+    ].slice(0, modelCapabilities(request.model).maxCharacters),
     charRefIds: unique([
       ...(request.charRefIds ?? enabledIds('charref_images')),
       ...addition.charRefIds
