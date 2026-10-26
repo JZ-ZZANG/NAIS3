@@ -23,7 +23,7 @@ import {
 import { AnimatePresence, motion } from 'motion/react'
 import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Scene, SceneCast } from '@shared/types'
-import { RESOLUTIONS, imageUrl } from '../lib/constants'
+import { RESOLUTIONS, imageUrl, thumbnailFallback } from '../lib/constants'
 import { useT } from '../lib/i18n'
 import { useGenerationStore } from '../stores/generation-store'
 import { loadCasts, useScenesStore } from '../stores/scenes-store'
@@ -146,13 +146,13 @@ export function PresetDropdown({
                     onClick={() => choose(p.id)}
                     className={cn(
                       'flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px]',
-                      p.id === activePresetId && 'font-semibold text-accent'
+                      p.id === activePresetId && 'font-semibold text-accent-ink'
                     )}
                   >
                     <span className="truncate">{p.name}</span>
                   </div>
                   <button
-                    className="shrink-0 rounded p-1 text-faint opacity-0 hover:text-fg group-hover:opacity-100"
+                    className="shrink-0 rounded p-1 text-faint opacity-0 hover:text-ink group-hover:opacity-100"
                     onClick={async () => {
                       const name = await askText(t('ui.presetName'), p.name)
                       if (name) void renamePreset(p.id, name)
@@ -164,7 +164,7 @@ export function PresetDropdown({
                   </button>
                   {presets.length > 1 && (
                     <button
-                      className="shrink-0 rounded p-1 text-faint opacity-0 hover:text-danger group-hover:opacity-100"
+                      className="shrink-0 rounded p-1 text-faint opacity-0 hover:text-danger-ink group-hover:opacity-100"
                       onClick={async () => {
                         if (
                           await askConfirm(t('ui.deletePreset'), {
@@ -187,7 +187,7 @@ export function PresetDropdown({
           </div>
           <div className="my-1 h-px bg-line" />
           <button
-            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] text-accent hover:bg-surface-2"
+            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] text-accent-ink hover:bg-surface-2"
             onClick={async () => {
               const name = await askText(t('ui.newPresetName'), t('ui.newPreset'))
               if (name) void createPreset(name)
@@ -310,7 +310,7 @@ export function CastSelector({
           <button
             className={cn(
               'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-surface-2',
-              !active && !activeGroup && 'font-semibold text-accent'
+              !active && !activeGroup && 'font-semibold text-accent-ink'
             )}
             onClick={() => {
               setActiveCast('')
@@ -335,7 +335,7 @@ export function CastSelector({
                   <div
                     className={cn(
                       'flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px]',
-                      c.id === activeCastId && 'font-semibold text-accent'
+                      c.id === activeCastId && 'font-semibold text-accent-ink'
                     )}
                   >
                     <span
@@ -348,7 +348,7 @@ export function CastSelector({
                     </span>
                   </div>
                   <button
-                    className="shrink-0 rounded p-1 text-faint opacity-0 hover:text-danger group-hover:opacity-100"
+                    className="shrink-0 rounded p-1 text-faint opacity-0 hover:text-danger-ink group-hover:opacity-100"
                     onClick={async () => {
                       if (
                         await askConfirm(t('ui.deleteCast'), {
@@ -402,7 +402,7 @@ export function CastSelector({
           </div>
           <div className="my-1 h-px bg-line" />
           <button
-            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] text-accent hover:bg-surface-2"
+            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] text-accent-ink hover:bg-surface-2"
             onClick={() => {
               setOpen(false)
               setTimeout(() => setManageOpen(true), 0) // 팝오버 dismiss 레이스 회피
@@ -438,7 +438,7 @@ function IconBtn({
           aria-pressed={active === undefined ? undefined : active}
           className={cn(
             'grid size-8 place-items-center rounded-md transition-colors',
-            active ? 'bg-accent text-white' : 'text-muted hover:bg-surface-2 hover:text-fg'
+            active ? 'bg-accent text-on-accent' : 'text-muted hover:bg-surface-2 hover:text-ink'
           )}
         >
           {icon}
@@ -479,8 +479,7 @@ function SceneGrid(): React.JSX.Element {
     if (el && savedGridScroll > 0 && el.scrollTop === 0) el.scrollTop = savedGridScroll
   }, [scenes.length])
 
-  // 스트리밍: 현재 생성 중인 씬과 미리보기 프레임 (해당 씬 카드에만 전달)
-  const previewPng = useGenerationStore((s) => s.previewPng)
+  // Only the generating card subscribes to streaming preview frames.
   const generatingSceneId = useGenerationStore(
     (s) => s.queue?.items.find((i) => i.state === 'generating')?.request.sceneId ?? null
   )
@@ -622,16 +621,11 @@ function SceneGrid(): React.JSX.Element {
           onReorder={(ids) => void reorder(ids)}
         >
           {scenes.map((scene) => (
-            <SceneCard
-              key={scene.id}
-              scene={scene}
-              live={scene.id === generatingSceneId ? previewPng : null}
-              generating={scene.id === generatingSceneId}
-            />
+            <SceneCard key={scene.id} scene={scene} generating={scene.id === generatingSceneId} />
           ))}
           <button
             onClick={() => void create(t('ui.newScene'))}
-            className="flex flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed border-line text-faint transition hover:text-accent"
+            className="flex flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed border-line text-faint transition hover:text-accent-ink"
             style={{ aspectRatio: CARD_ASPECT[cardOrientation] }}
           >
             <Plus size={22} />
@@ -682,7 +676,7 @@ function BulkBar(): React.JSX.Element {
 
   return (
     <div className="flex flex-wrap items-center gap-1.5 border-b border-line bg-surface-2 px-3 py-2 text-[13px]">
-      <span className="font-medium text-fg">{t('ui.valueSelected', n)}</span>
+      <span className="font-medium text-ink">{t('ui.valueSelected', n)}</span>
       <Button size="sm" variant="ghost" onClick={selectAll}>
         {t('ui.selectAll')}
       </Button>
@@ -695,7 +689,7 @@ function BulkBar(): React.JSX.Element {
       <div className="flex items-center gap-0.5 rounded-full border border-line bg-paper p-0.5">
         <span className="px-1.5 text-[12px] text-muted">{t('ui.queue')}</span>
         <button
-          className="grid size-5 place-items-center rounded-full text-fg hover:bg-surface-2 disabled:opacity-30"
+          className="grid size-5 place-items-center rounded-full text-ink hover:bg-surface-2 disabled:opacity-30"
           disabled={disabled}
           title={reserveTip(-1)}
           aria-label={reserveTip(-1)}
@@ -704,7 +698,7 @@ function BulkBar(): React.JSX.Element {
           <Minus size={13} />
         </button>
         <button
-          className="grid size-5 place-items-center rounded-full text-fg hover:bg-surface-2 disabled:opacity-30"
+          className="grid size-5 place-items-center rounded-full text-ink hover:bg-surface-2 disabled:opacity-30"
           disabled={disabled}
           title={reserveTip(1)}
           aria-label={reserveTip(1)}
@@ -792,7 +786,7 @@ function BulkBar(): React.JSX.Element {
       <Button
         size="sm"
         variant="ghost"
-        className="text-danger"
+        className="text-danger-ink"
         disabled={disabled}
         onClick={async () => {
           if (
@@ -843,20 +837,19 @@ function reserveBadges(
   }
   for (const [id, n] of Object.entries(scene.reserves)) {
     if (id !== '' && n > 0 && !casts.some((c) => c.id === id))
-      out.push({ key: id, name: '', count: n, color: '#6b7280', deleted: true })
+      out.push({ key: id, name: '', count: n, color: null, deleted: true })
   }
   return out
 }
 
 const SceneCard = memo(function SceneCard({
   scene,
-  live,
   generating
 }: {
   scene: Scene
-  live: string | null
   generating: boolean
 }): React.JSX.Element {
+  const live = useGenerationStore((s) => (generating ? s.previewPng : null))
   const editMode = useScenesStore((s) => s.editMode)
   const cardOrientation = useScenesStore((s) => s.cardOrientation)
   const selection = useScenesStore((s) => s.selection)
@@ -895,11 +888,7 @@ const SceneCard = memo(function SceneCard({
   // 카드는 작게 표시되므로 640 webp 썸네일이면 충분히 선명하고, 풀해상도 대신 써서 드래그가 부드럽다.
   const src = live
     ? `data:image/png;base64,${live}`
-    : scene.thumbnail
-      ? `data:image/webp;base64,${scene.thumbnail}`
-      : scene.thumbnailPath
-        ? imageUrl(scene.thumbnailPath)
-        : null
+    : scene.thumbnailUrl || (scene.thumbnailPath ? imageUrl(scene.thumbnailPath) : null)
 
   // 우클릭 메뉴/3-dot 공용 액션
   const renameScene = async (): Promise<void> => {
@@ -969,6 +958,7 @@ const SceneCard = memo(function SceneCard({
           src={src}
           className="h-full w-full cursor-pointer object-cover"
           draggable={false}
+          {...thumbnailFallback(scene.thumbnailPath)}
           alt=""
         />
       ) : (
@@ -997,8 +987,12 @@ const SceneCard = memo(function SceneCard({
                 <span
                   key={b.key}
                   className={cn(
-                    'grid h-6 min-w-6 place-items-center rounded-full px-1.5 text-[12px] font-bold text-white shadow',
-                    b.color === null && 'bg-danger'
+                    'grid h-6 min-w-6 place-items-center rounded-full px-1.5 text-[12px] font-bold shadow',
+                    b.deleted
+                      ? 'bg-black/60 text-white/80'
+                      : b.color === null
+                        ? 'bg-danger text-on-danger'
+                        : 'text-white'
                   )}
                   style={b.color ? { backgroundColor: b.color } : undefined}
                   title={t('ui.valueValueImages', reserveBadgeLabel(b, t), b.count)}
@@ -1070,8 +1064,8 @@ const SceneCard = memo(function SceneCard({
               editValue={activeGroup ? groupEditValue : ctxCount}
               className={cn(
                 'min-w-5 rounded-full px-1 text-center text-[12px] font-medium text-white',
-                !activeCast && !activeGroup && ctxCount > 0 && 'bg-danger',
-                activeGroup && ctxCount > 0 && 'bg-accent'
+                !activeCast && !activeGroup && ctxCount > 0 && 'bg-danger text-on-danger',
+                activeGroup && ctxCount > 0 && 'bg-accent text-on-accent'
               )}
               style={activeCast && ctxCount > 0 ? { backgroundColor: activeCast.color } : undefined}
               title={
@@ -1121,7 +1115,7 @@ function MenuItem({
     <button
       className={cn(
         'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-surface-2',
-        danger && 'text-danger'
+        danger && 'text-danger-ink'
       )}
       onClick={onClick}
     >

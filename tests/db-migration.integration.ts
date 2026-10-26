@@ -1,10 +1,13 @@
 import Database from 'better-sqlite3'
+import { spawn } from 'child_process'
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'fs'
+import { createRequire } from 'module'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { backupNow, closeDb, getDb, initDb } from '../src/main/db'
 import { migrations } from '../src/main/db/migrations'
+import { migrate } from '../src/main/db/migrate'
 import { ensureSceneAdditionSchema } from '../src/main/db/scene-addition-schema'
 import { resolveInitialLanguage } from '../src/main/i18n'
 
@@ -130,27 +133,33 @@ afterEach(() => {
 })
 
 describe('existing workspace migration', () => {
-  it('runs the upstream v17 fix when opening an older custom v17 database', () => {
-    const old = seedLegacy()
-    ensureSceneAdditionSchema(old)
-    old.exec('CREATE TABLE scene_sequence_entries (id INTEGER PRIMARY KEY, name TEXT NOT NULL)')
-    old.prepare('INSERT INTO scene_sequence_entries (id, name) VALUES (1, ?)').run('saved sequence')
-    old.prepare('INSERT INTO scene_character_additions (scene_id) VALUES (1)').run()
-    old.pragma('foreign_keys = OFF')
-    old.prepare('UPDATE character_prompts SET folder_id = 999 WHERE id = 1').run()
-    old.close()
-    expect(initDb().version).toBe(migrations.length)
-    expect(
-      getDb().prepare('SELECT folder_id FROM character_prompts WHERE id = 1').pluck().get()
-    ).toBeNull()
-    expect(
-      getDb().prepare('SELECT name FROM scene_sequence_entries WHERE id = 1').pluck().get()
-    ).toBe('saved sequence')
-    expect(getDb().prepare('SELECT scene_id FROM scene_character_additions').pluck().all()).toEqual(
-      [1]
-    )
-    withBackup((backup) => expect(backup.pragma('user_version', { simple: true })).toBe(17))
-  })
+  it.each(['initDb', 'shared migration'])(
+    'runs the upstream v17 fix for custom v17 via %s',
+    (entry) => {
+      const old = seedLegacy()
+      ensureSceneAdditionSchema(old)
+      old.exec('CREATE TABLE scene_sequence_entries (id INTEGER PRIMARY KEY, name TEXT NOT NULL)')
+      old
+        .prepare('INSERT INTO scene_sequence_entries (id, name) VALUES (1, ?)')
+        .run('saved sequence')
+      old.prepare('INSERT INTO scene_character_additions (scene_id) VALUES (1)').run()
+      old.pragma('foreign_keys = OFF')
+      old.prepare('UPDATE character_prompts SET folder_id = 999 WHERE id = 1').run()
+      if (entry === 'shared migration') migrate(old, join(environment.directory, 'backups'))
+      old.close()
+      expect(initDb().version).toBe(migrations.length)
+      expect(
+        getDb().prepare('SELECT folder_id FROM character_prompts WHERE id = 1').pluck().get()
+      ).toBeNull()
+      expect(
+        getDb().prepare('SELECT name FROM scene_sequence_entries WHERE id = 1').pluck().get()
+      ).toBe('saved sequence')
+      expect(
+        getDb().prepare('SELECT scene_id FROM scene_character_additions').pluck().all()
+      ).toEqual([1])
+      withBackup((backup) => expect(backup.pragma('user_version', { simple: true })).toBe(17))
+    }
+  )
 
   it('preserves existing data, creates a standalone old-version backup and does not reseed on reopen', () => {
     const old = seedLegacy({ language: 'en' })
@@ -217,6 +226,77 @@ describe('existing workspace migration', () => {
     expect(initDb().version).toBe(migrations.length)
     withBackup((backup) => expect(snapshot(backup)).toEqual(retrySnapshot))
     expect(readdirSync(join(environment.directory, 'backups'))).toEqual(['pre-migration-v17.db'])
+  })
+
+  it('removes snapshot temp files left behind by an interrupted launch', () => {
+    seedLegacy().close()
+    const backups = join(environment.directory, 'backups')
+    mkdirSync(backups)
+    const stale = 'pre-migration-v17.db.00000000-0000-0000-0000-000000000000.tmp'
+    writeFileSync(join(backups, stale), 'partial snapshot')
+    writeFileSync(join(backups, `${stale}-journal`), 'journal of the partial snapshot')
+    initDb()
+    expect(readdirSync(backups)).toEqual(['pre-migration-v17.db'])
+  })
+
+  it('removes snapshot temp files on a start that needs no migration', () => {
+    seedLegacy().close()
+    initDb()
+    closeDb()
+    // 1.0.28 workspaces already at the latest version still carry temp files from killed starts
+    const backups = join(environment.directory, 'backups')
+    const stale = 'pre-migration-v18.db.00000000-0000-0000-0000-000000000000.tmp'
+    writeFileSync(join(backups, stale), 'partial snapshot')
+    writeFileSync(join(backups, `${stale}-journal`), 'journal of the partial snapshot')
+    expect(initDb().version).toBe(migrations.length)
+    expect(readdirSync(backups)).toEqual(['pre-migration-v17.db'])
+  })
+
+  it('refuses a database from a newer app version without backing it up', () => {
+    const old = seedLegacy()
+    old.pragma(`user_version = ${migrations.length + 1}`)
+    old.close()
+    expect(() => initDb()).toThrow(`DB version ${migrations.length + 1} is newer than app supports`)
+    expect(getDb().pragma('user_version', { simple: true })).toBe(migrations.length + 1)
+    expect(readdirSync(environment.directory)).not.toContain('backups')
+  })
+
+  it('does not re-run a migration that another launch applied while this one waited', async () => {
+    // 1.0.27 workspace (v18). A second process holds the write lock, applies v19 and commits
+    // after this process has already read user_version 18 — the 1.0.28 double-launch race.
+    const old = seedLegacy()
+    old.transaction(() => {
+      migrations[17](old)
+      old.pragma('user_version = 18')
+    })()
+    old.close()
+    const other = spawn(
+      process.execPath,
+      [
+        '-e',
+        `const db = new (require(process.argv[1]))(process.argv[2], { timeout: 5000 })
+         db.exec('BEGIN IMMEDIATE')
+         console.log('locked')
+         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000)
+         db.exec('CREATE INDEX idx_images_file_path ON images(file_path)')
+         db.pragma('user_version = 19')
+         db.exec('COMMIT')
+         db.close()`,
+        createRequire(import.meta.url).resolve('better-sqlite3'),
+        path()
+      ],
+      { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: ['ignore', 'pipe', 'inherit'] }
+    )
+    const exited = new Promise((resolve) => other.on('exit', resolve))
+    await new Promise((resolve) => other.stdout.once('data', resolve))
+
+    expect(initDb().version).toBe(migrations.length)
+    expect(await exited).toBe(0)
+    expect(getDb().pragma('user_version', { simple: true })).toBe(migrations.length)
+    const indexes = getDb()
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?")
+      .all('idx_images_file_path')
+    expect(indexes).toHaveLength(1)
   })
 
   it('does not migrate if the backup directory cannot be created', () => {

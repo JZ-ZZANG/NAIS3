@@ -26,7 +26,10 @@ export interface BrowserAccount extends Omit<NaiAccountInfo, 'tier' | 'anlas' | 
   token: string
 }
 
-export interface BrowserImage extends HistoryItem {
+// Persisted records keep the base64 `thumbnail` / `coverThumbnail` fields so existing IndexedDB
+// state stays readable; responses map them to the URL fields of the shared types.
+export interface BrowserImage extends Omit<HistoryItem, 'thumbnailUrl'> {
+  thumbnail: string
   base64: string
   payloadJson: string | null
   sceneId: number | null
@@ -34,8 +37,17 @@ export interface BrowserImage extends HistoryItem {
   favorite: boolean
 }
 
-export interface BrowserLibraryImage extends LibraryImage {
+export interface BrowserLibraryImage extends Omit<LibraryImage, 'thumbnailUrl'> {
+  thumbnail: string
   base64: string
+}
+
+export interface BrowserScene extends Omit<Scene, 'thumbnailUrl'> {
+  thumbnail: string
+}
+
+export interface BrowserLibraryStack extends Omit<LibraryStack, 'coverUrl'> {
+  coverThumbnail: string
 }
 
 export interface BrowserState {
@@ -55,7 +67,7 @@ export interface BrowserState {
   charRefs: CharRefItem[]
   promptPresets: PromptPreset[]
   scenePresets: ScenePreset[]
-  scenes: Scene[]
+  scenes: BrowserScene[]
   scenePlusPresets: ScenePlusPreset[]
   scenePlusScenes: ScenePlusScene[]
   scenePlusCasts: ScenePlusCast[]
@@ -63,7 +75,7 @@ export interface BrowserState {
   scenePlusCastSettings: ScenePlusCastSettings
   images: BrowserImage[]
   libraryImages: BrowserLibraryImage[]
-  libraryStacks: LibraryStack[]
+  libraryStacks: BrowserLibraryStack[]
 }
 
 export function emptyState(): BrowserState {

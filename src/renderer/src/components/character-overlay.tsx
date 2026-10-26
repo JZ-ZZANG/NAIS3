@@ -20,6 +20,7 @@ import type { CharacterCard } from '@shared/types'
 import {
   canEnableAnotherCharacter,
   characterCenterForModel,
+  isMediumEffortModel,
   isV5Model,
   LEGACY_CHARACTER_POSITION_GRID,
   modelCapabilities,
@@ -308,7 +309,7 @@ export function CharacterOverlay(): React.JSX.Element {
         <span
           className={cn(
             'grid size-4 shrink-0 place-items-center rounded border-2',
-            checked ? 'border-accent bg-accent text-white' : 'border-line'
+            checked ? 'border-accent bg-accent text-on-accent' : 'border-line'
           )}
         >
           {checked && <span className="text-[9px] leading-none">✓</span>}
@@ -423,7 +424,7 @@ export function CharacterOverlay(): React.JSX.Element {
           <Button
             size="sm"
             variant="ghost"
-            className="h-8 gap-1 px-2 text-[12px] hover:text-danger"
+            className="h-8 gap-1 px-2 text-[12px] hover:text-danger-ink"
             title={t('ui.removeCharacterThumbnail')}
             onClick={() => void clearThumbnail(char.id)}
           >
@@ -442,7 +443,7 @@ export function CharacterOverlay(): React.JSX.Element {
         <Button
           size="sm"
           variant="ghost"
-          className="h-8 w-8 p-0 hover:text-danger"
+          className="h-8 w-8 p-0 hover:text-danger-ink"
           title={t('ui.deleteCharacter')}
           onClick={() => removeCard(char.id)}
         >
@@ -458,11 +459,18 @@ export function CharacterOverlay(): React.JSX.Element {
         placeholder="girl, ..."
         onValueChange={(v) => updateCard(char.id, { prompt: v })}
       />
+      {isMediumEffortModel(model) && (
+        // 칸에 글자가 있으면 placeholder가 안 보이므로 안내를 항상 표시
+        <p className="text-[11.5px] leading-snug text-faint">
+          {t('ui.negativeUnusedAtMediumEffort')}
+        </p>
+      )}
       <PromptEditor
         negative
         className="h-24 max-h-96 min-h-14 resize-y bg-surface-2"
         value={char.negativePrompt}
-        tokenModel={model}
+        // Medium effort는 캐릭터 UC를 보내지 않으므로 토큰 수도 세지 않음
+        tokenModel={isMediumEffortModel(model) ? undefined : model}
         tokenLimit={tokenLimit}
         placeholder={t('ui.characterNegative')}
         onValueChange={(v) => updateCard(char.id, { negativePrompt: v })}
@@ -488,8 +496,8 @@ export function CharacterOverlay(): React.JSX.Element {
             className={cn(
               'rounded-full px-1.5 font-mono text-[10.5px]',
               enabledCount >= maxCharacters
-                ? 'bg-danger/15 text-danger'
-                : 'bg-accent-soft text-accent'
+                ? 'bg-danger/15 text-danger-ink'
+                : 'bg-accent-soft text-accent-ink'
             )}
             title={t('ui.activeCharactersValueValue', enabledCount, maxCharacters)}
           >
@@ -511,7 +519,7 @@ export function CharacterOverlay(): React.JSX.Element {
           <span
             className={cn(
               'font-mono text-[10.5px]',
-              charTokens > tokenLimit ? 'text-danger' : 'text-faint'
+              charTokens > tokenLimit ? 'text-danger-ink' : 'text-faint'
             )}
             title={t('ui.basePromptCharacterPromptsCombinedSharedTokenLimit', tokenLimit)}
           >
@@ -644,7 +652,7 @@ export function CharacterOverlay(): React.JSX.Element {
           <Button
             size="sm"
             variant="ghost"
-            className="gap-1 text-danger hover:text-danger"
+            className="gap-1 text-danger-ink hover:text-danger-ink"
             disabled={selected.size === 0}
             onClick={() => void bulkDelete()}
           >

@@ -78,7 +78,7 @@ export function SceneCardFrame({
             <span
               className={cn(
                 'absolute right-1.5 top-1.5 grid size-5 place-items-center rounded border-2 transition',
-                selected ? 'border-accent bg-accent text-white' : 'border-white/80 bg-black/30'
+                selected ? 'border-accent bg-accent text-on-accent' : 'border-white/80 bg-black/30'
               )}
             >
               {selected && <span className="text-[11px] leading-none">✓</span>}

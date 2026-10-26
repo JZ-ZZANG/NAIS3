@@ -11,10 +11,13 @@ import { arrayMove, rectSortingStrategy, SortableContext } from '@dnd-kit/sortab
 import { ImageOff } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import type { Scene } from '@shared/types'
-import { imageUrl } from '../lib/constants'
+import { imageUrl, thumbnailFallback } from '../lib/constants'
 import { CARD_ASPECT } from './scene-card-frame'
 
-type GridScene = Pick<Scene, 'id' | 'name' | 'thumbnail' | 'thumbnailPath'>
+type GridScene = Pick<Scene, 'id' | 'name' | 'thumbnailPath'> & {
+  thumbnailUrl?: string
+  thumbnail?: string
+}
 
 export function SortableSceneGrid({
   scenes,
@@ -42,11 +45,13 @@ export function SortableSceneGrid({
     if (from < 0 || to < 0) return
     onReorder(arrayMove(scenes, from, to).map((scene) => scene.id))
   }
-  const dragSrc = dragScene?.thumbnail
-    ? `data:image/webp;base64,${dragScene.thumbnail}`
-    : dragScene?.thumbnailPath
-      ? imageUrl(dragScene.thumbnailPath)
-      : null
+  const dragSrc =
+    dragScene?.thumbnailUrl ||
+    (dragScene?.thumbnail
+      ? `data:image/webp;base64,${dragScene.thumbnail}`
+      : dragScene?.thumbnailPath
+        ? imageUrl(dragScene.thumbnailPath)
+        : null)
 
   return (
     <DndContext
@@ -76,7 +81,13 @@ export function SortableSceneGrid({
             style={{ aspectRatio: CARD_ASPECT[orientation] }}
           >
             {dragSrc ? (
-              <img src={dragSrc} className="h-full w-full object-cover" draggable={false} alt="" />
+              <img
+                src={dragSrc}
+                className="h-full w-full object-cover"
+                draggable={false}
+                {...thumbnailFallback(dragScene.thumbnailPath)}
+                alt=""
+              />
             ) : (
               <div className="flex h-full w-full items-center justify-center bg-paper text-faint">
                 <ImageOff size={26} strokeWidth={1.3} />
