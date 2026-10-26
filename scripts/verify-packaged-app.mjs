@@ -46,13 +46,18 @@ const output = execFileSync(
     db.exec('CREATE TABLE smoke (value INTEGER); INSERT INTO smoke VALUES (42)');
     assert.equal(db.prepare('SELECT value FROM smoke').get().value, 42);
     db.close();
-    const sharp = require(path.join(root, 'node_modules/sharp'));
-    sharp({create:{width:2,height:2,channels:4,background:'#ffffff'}}).png().toBuffer()
-      .then(async png => {
-        const metadata = await sharp(png).metadata();
-        assert.equal(metadata.width, 2);
-        console.log('Packaged native runtime passed: ' + process.platform + ' ' + process.arch);
-      }).catch(error => { console.error(error); process.exitCode = 1; });
+    console.log('Packaged SQLite runtime passed: ' + process.platform + ' ' + process.arch);
+    // Linux Electron uses WebAssembly sharp, verified in the next process below.
+    // Loading native libvips here bypasses the app's protection against GLib conflicts.
+    if (process.platform !== 'linux') {
+      const sharp = require(path.join(root, 'node_modules/sharp'));
+      sharp({create:{width:2,height:2,channels:4,background:'#ffffff'}}).png().toBuffer()
+        .then(async png => {
+          const metadata = await sharp(png).metadata();
+          assert.equal(metadata.width, 2);
+          console.log('Packaged native sharp passed: ' + process.platform + ' ' + process.arch);
+        }).catch(error => { console.error(error); process.exitCode = 1; });
+    }
   `,
     asar,
     arch
