@@ -23,7 +23,7 @@ export function useBoolSetting(key: string, fallback: boolean): [boolean, (on: b
 }
 
 /** 저장 폴더 경로와 기본값 여부. 폴더를 바꾸거나 되돌린 뒤 refresh로 다시 읽는다 */
-export function useSaveDir(target: 'main' | 'scene'): {
+export function useSaveDir(target: 'main' | 'scene' | 'scene-plus'): {
   dir: string
   isDefault: boolean
   refresh: () => void
