@@ -2,13 +2,22 @@ import {
   app,
   BrowserWindow,
   clipboard,
-  dialog,
+  ClipboardItem,
   ipcMain,
   nativeImage,
   Notification,
   shell
 } from 'electron'
-import type { IpcEventMap, IpcInvokeMap, NaiAccountInfo } from '../shared/types'
+import type { NativeImage } from 'electron'
+import { showOpenDialog, showSaveDialog } from './dialogs'
+import { applyZoom } from './zoom'
+import type {
+  IpcEventMap,
+  IpcInvokeMap,
+  NaiAccountInfo,
+  NaiTokenStoreLockReason,
+  QueueHalt
+} from '../shared/types'
 import {
   createCharacter,
   createFolder,
@@ -55,12 +64,16 @@ import {
   getNaiAccountToken,
   getNaiToken,
   getNaiTokenInfo,
+  getNaiTokenStoreLock,
+  isNaiTokenEncryptionAvailable,
   getSetting,
   setActiveNaiAccount,
   setNaiToken,
   setSetting
 } from './db/settings'
 import { anlasUsage, logBalance } from './nai/anlas-log'
+import { anlasGuardBlockForDirect, anlasGuardBlockForQueue } from './nai/anlas-guard'
+import { directorCharge, UPSCALE_CHARGE } from '../shared/anlas-guard'
 import {
   augmentImage,
   fetchAnlasBalance,
@@ -71,6 +84,8 @@ import {
 import { listImages, getImagePayload, saveGeneratedImage } from './images/storage'
 import {
   enqueueReservedScenes,
+  planReservedScenes,
+  bindSceneReservationRecovery,
   listPresets,
   createPreset,
   renamePreset,
@@ -199,6 +214,11 @@ import { basename } from 'path'
 import sharp from './sharp'
 import { verifyToken } from './nai/client'
 import { t } from './i18n'
+import {
+  catchTokenStoreLock,
+  lockedTokenStoreResult,
+  tokenStoreLockedResult
+} from './nai/token-store-lock'
 import type { GenerationQueue } from './queue/generation-queue'
 
 /** IpcInvokeMap 계약을 강제하는 handle 등록 헬퍼 */
@@ -215,7 +235,14 @@ export function broadcast<C extends keyof IpcEventMap>(channel: C, payload: IpcE
   }
 }
 
-async function naiAccountInfos(): Promise<{ accounts: NaiAccountInfo[]; activeId: string | null }> {
+async function naiAccountInfos(): Promise<{
+  accounts: NaiAccountInfo[]
+  activeId: string | null
+  locked: boolean
+  lockReason: NaiTokenStoreLockReason | null
+  plaintextStorage: boolean
+}> {
+  const lockReason = getNaiTokenStoreLock()
   const accounts = getNaiAccounts()
   const activeId = getActiveNaiAccount()?.id ?? null
   const infos = await Promise.all(
@@ -234,7 +261,13 @@ async function naiAccountInfos(): Promise<{ accounts: NaiAccountInfo[]; activeId
       }
     })
   )
-  return { accounts: infos, activeId }
+  return {
+    accounts: infos,
+    activeId,
+    locked: lockReason !== null,
+    lockReason,
+    plaintextStorage: !isNaiTokenEncryptionAvailable()
+  }
 }
 
 function localDateStamp(date = new Date()): string {
@@ -252,37 +285,51 @@ export function registerIpcHandlers(ctx: { dbVersion: number; queue: GenerationQ
 
   // 검증 성공 시에만 저장 — 잘못된 토큰이 조용히 저장되는 것 방지
   handle('nai:setToken', async ({ token }) => {
+    const locked = lockedTokenStoreResult()
+    if (locked) return locked
     const result = await verifyToken(token)
-    if (result.valid) setNaiToken(token)
-    return result
+    if (!result.valid) return result
+    return catchTokenStoreLock(() => {
+      setNaiToken(token)
+      return result
+    }, tokenStoreLockedResult)
   })
 
-  handle('nai:tokenStatus', () => getNaiTokenInfo())
+  handle('nai:tokenStatus', () => ({
+    ...getNaiTokenInfo(),
+    plaintextStorage: !isNaiTokenEncryptionAvailable()
+  }))
   handle('nai:revealToken', () => ({ token: getNaiToken() }))
   handle('nai:deleteToken', () => {
     deleteNaiToken()
   })
   handle('nai:listAccounts', () => naiAccountInfos())
   handle('nai:addAccount', async ({ token, label }) => {
+    const locked = lockedTokenStoreResult()
+    if (locked) return locked
     const result = await verifyToken(token)
     if (!result.valid) return result
-    const account = addNaiAccount(token, label)
+    const account = catchTokenStoreLock(() => addNaiAccount(token, label), tokenStoreLockedResult)
+    if (!('id' in account)) return account
     broadcast('nai:accountChanged', {
       accountId: account.id,
       reason: 'added',
       label: account.label
     })
-    return { ...result, accountId: account.id }
+    return { ...result, accountId: account.id, label: account.label }
   })
   handle('nai:setActiveAccount', async ({ id }) => {
-    const active = setActiveNaiAccount(id)
+    const active = catchTokenStoreLock(
+      () => setActiveNaiAccount(id),
+      () => false
+    )
     const token = active ? getNaiAccountToken(id) : null
     if (!token) return { active: false, anlas: null, tier: null }
     const balance = await fetchAnlasBalance(token)
     const account = getNaiAccounts().find((item) => item.id === id)
     broadcast('nai:accountChanged', { accountId: id, reason: 'selected', label: account?.label })
     if (balance.anlas !== null) {
-      logBalance(balance.anlas)
+      logBalance(balance.anlas, id)
       broadcast('anlas:balance', {
         anlas: balance.anlas,
         tier: balance.tier,
@@ -292,26 +339,45 @@ export function registerIpcHandlers(ctx: { dbVersion: number; queue: GenerationQ
     return { active: true, ...balance }
   })
   handle('nai:revealAccountToken', ({ id }) => ({ token: getNaiAccountToken(id) }))
-  handle('nai:deleteAccount', ({ id }) => {
-    const activeId = deleteNaiAccount(id)
-    broadcast('nai:accountChanged', { accountId: activeId, reason: 'deleted' })
-    return { activeId }
-  })
+  handle('nai:deleteAccount', ({ id }) =>
+    // 잠긴 동안은 계정 목록이 비어 있어 지울 대상도 없다 — 잠긴 값은 nai:deleteToken으로만 지운다.
+    // "활성 계정 없음"과 구분되도록 locked로 알린다
+    catchTokenStoreLock(
+      () => {
+        const activeId = deleteNaiAccount(id)
+        broadcast('nai:accountChanged', { accountId: activeId, reason: 'deleted' })
+        return { activeId, locked: false, lockReason: null }
+      },
+      (lockReason) => ({ activeId: null, locked: true, lockReason })
+    )
+  )
   handle('nai:balance', async () => {
     const token = getNaiToken()
     if (!token) return { anlas: null, tier: null }
     const { anlas, tier, usage } = await fetchAnlasBalance(token)
-    if (anlas !== null) logBalance(anlas)
+    if (anlas !== null) logBalance(anlas, getActiveNaiAccount()?.id)
     return { anlas, tier, ...(usage ? { usage } : {}) }
   })
   handle('nai:anlasUsage', () => anlasUsage())
 
-  handle('scenes:enqueueReserved', (request) => ({
-    ids: enqueueReservedScenes(ctx.queue, request)
-  }))
-  handle('queue:enqueue', ({ request, count, randomCharacterPrompts }) => ({
-    ids: ctx.queue.enqueue(request, count, randomCharacterPrompts, applySceneCharacterAddition)
-  }))
+  // 무료 범위 지킴이: 묶음 전체를 예약 전에 확인해 N건 실패 대신 한 번에 알린다
+  // (항목별 최종 확인은 생성 직전에 다시 한다)
+  handle('scenes:enqueueReserved', async (request) => {
+    const blocked = await anlasGuardBlockForQueue(
+      planReservedScenes(request).requests.map(applySceneCharacterAddition)
+    )
+    if (blocked) return { ids: [], blocked }
+    // 확인하는 사이 예약이 바뀌었을 수 있어 다시 계획해 넣는다
+    return { ids: enqueueReservedScenes(ctx.queue, request) }
+  })
+  handle('queue:enqueue', async ({ request, count, randomCharacterPrompts }) => {
+    const prepared = applySceneCharacterAddition(request)
+    const blocked = await anlasGuardBlockForQueue(Array.from({ length: count }, () => prepared))
+    if (blocked) return { ids: [], blocked }
+    return {
+      ids: ctx.queue.enqueue(request, count, randomCharacterPrompts, applySceneCharacterAddition)
+    }
+  })
   handle('queue:cancel', ({ ids }) => {
     ctx.queue.cancel(ids)
   })
@@ -369,7 +435,7 @@ export function registerIpcHandlers(ctx: { dbVersion: number; queue: GenerationQ
   handle('backup:export', async () => {
     const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
     const stamp = localDateStamp()
-    const result = await dialog.showSaveDialog(win, {
+    const result = await showSaveDialog(win, {
       title: t('ui.exportData'),
       defaultPath: `NAIS3-backup-${stamp}.nais`,
       filters: [{ name: t('ui.naisBackup'), extensions: ['nais'] }]
@@ -386,7 +452,7 @@ export function registerIpcHandlers(ctx: { dbVersion: number; queue: GenerationQ
 
   handle('backup:exportLegacy', async () => {
     const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
-    const result = await dialog.showSaveDialog(win, {
+    const result = await showSaveDialog(win, {
       title: t('ui.exportLegacyJson'),
       defaultPath: `NAIS3-backup-${localDateStamp()}.json`,
       filters: [{ name: 'JSON', extensions: ['json'] }]
@@ -402,7 +468,7 @@ export function registerIpcHandlers(ctx: { dbVersion: number; queue: GenerationQ
 
   handle('backup:import', async () => {
     const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
-    const result = await dialog.showOpenDialog(win, {
+    const result = await showOpenDialog(win, {
       title: t('ui.importArchiveOrLegacyBackup'),
       filters: [{ name: t('ui.naisBackup'), extensions: ['nais', 'json'] }],
       properties: ['openFile']
@@ -585,7 +651,7 @@ export function registerIpcHandlers(ctx: { dbVersion: number; queue: GenerationQ
   handle('library:exportStack', async ({ id }) => ({ count: await exportLibraryStack(id) }))
 
   handle('scenes:exportJson', async ({ presetId }) => ({ saved: await exportScenesJson(presetId) }))
-  handle('scenes:importJson', async ({ presetId }) => ({ count: await importScenesJson(presetId) }))
+  handle('scenes:importJson', ({ presetId }) => importScenesJson(presetId))
   handle('scenes:exportZip', async ({ presetId }) => ({ count: await exportZip(presetId) }))
 
   handle('settings:get', ({ key }) => ({ value: getSetting(key) }))
@@ -678,7 +744,7 @@ export function registerIpcHandlers(ctx: { dbVersion: number; queue: GenerationQ
     const memBuf = memory ? getMemoryImage(filePath) : null
     if (memory && !memBuf) return { saved: false } // 원본 만료 (자동저장 꺼짐 생성분)
     const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
-    const result = await dialog.showSaveDialog(win, {
+    const result = await showSaveDialog(win, {
       title: t('ui.saveAs'),
       defaultPath: memory ? `NAIS3_${Date.now()}.png` : basename(filePath),
       filters: [{ name: 'PNG', extensions: ['png'] }]
@@ -691,7 +757,7 @@ export function registerIpcHandlers(ctx: { dbVersion: number; queue: GenerationQ
 
   handle('images:saveBase64As', async ({ base64, defaultName }) => {
     const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
-    const result = await dialog.showSaveDialog(win, {
+    const result = await showSaveDialog(win, {
       title: t('ui.saveImage'),
       defaultPath: defaultName ?? `NAIS3_${Date.now()}.png`,
       filters: [{ name: 'PNG', extensions: ['png'] }]
@@ -701,18 +767,22 @@ export function registerIpcHandlers(ctx: { dbVersion: number; queue: GenerationQ
     return { saved: true }
   })
 
-  handle('images:copy', ({ filePath }) => {
+  // Electron 44+ clipboard follows the W3C API: write() takes ClipboardItems and is async
+  const copyImage = async (img: NativeImage): Promise<{ copied: boolean }> => {
+    if (img.isEmpty()) return { copied: false }
+    const png = new Blob([new Uint8Array(img.toPNG())], { type: 'image/png' })
+    await clipboard.write([new ClipboardItem({ 'image/png': png })])
+    return { copied: true }
+  }
+
+  handle('images:copy', async ({ filePath }) => {
     if (isMemoryPath(filePath)) {
       const buf = getMemoryImage(filePath)
       if (!buf) return { copied: false }
-      clipboard.writeImage(nativeImage.createFromBuffer(buf))
-      return { copied: true }
+      return copyImage(nativeImage.createFromBuffer(buf))
     }
     if (!isUnderImagesRoot(filePath)) return { copied: false }
-    const img = nativeImage.createFromPath(filePath)
-    if (img.isEmpty()) return { copied: false }
-    clipboard.writeImage(img)
-    return { copied: true }
+    return copyImage(nativeImage.createFromPath(filePath))
   })
 
   const saveDirKey = (target?: 'main' | 'scene' | 'scene-plus'): string =>
@@ -733,7 +803,7 @@ export function registerIpcHandlers(ctx: { dbVersion: number; queue: GenerationQ
   })
   handle('settings:pickSaveDir', async (req) => {
     const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
-    const result = await dialog.showOpenDialog(win, {
+    const result = await showOpenDialog(win, {
       title:
         req?.target === 'scene-plus'
           ? t('ui.chooseScenePlusSaveFolder')
@@ -760,14 +830,17 @@ export function registerIpcHandlers(ctx: { dbVersion: number; queue: GenerationQ
     }
   })
 
-  handle('notify:done', ({ done, failed }) => {
+  handle('notify:done', ({ done, failed, stopped }) => {
     const win = BrowserWindow.getAllWindows()[0]
     if (!win || win.isFocused()) return // 보고 있는 중엔 토스트 불필요
     if (!Notification.isSupported()) return
-    const body =
+    const counts =
       failed > 0 ? t('ui.valueImagesDoneValueFailed', done, failed) : t('ui.valueImagesDone', done)
+    // Anlas 가드로 멈췄으면 제목을 바꾸고 이유를 붙인다
+    const body = stopped ? `${counts}\n${stopped}` : counts
+    const title = stopped ? t('ui.nais3GenerationStopped') : t('ui.nais3GenerationComplete')
     // silent — 소리는 앱의 알림음 설정이 따로 담당 (이중 재생 방지)
-    const n = new Notification({ title: t('ui.nais3GenerationComplete'), body, silent: true })
+    const n = new Notification({ title, body, silent: true })
     n.on('click', () => {
       if (win.isMinimized()) win.restore()
       win.show()
@@ -838,9 +911,16 @@ export function registerIpcHandlers(ctx: { dbVersion: number; queue: GenerationQ
   })
 
   handle('images:upscale', async ({ imageBase64 }) => {
+    const account = getActiveNaiAccount()
     const token = getNaiToken()
-    if (!token) return { error: t('ui.naiTokenIsNotConfigured') }
+    if (!account || !token) return { error: t('ui.naiTokenIsNotConfigured') }
     try {
+      // 업스케일은 항상 1 Anlas — 무료 범위 지킴이가 켜져 있으면 보내기 전에 확인
+      const blocked = await anlasGuardBlockForDirect(
+        { id: account.id, token },
+        () => UPSCALE_CHARGE
+      )
+      if (blocked) return { error: blocked }
       const input = Buffer.from(imageBase64.replace(/^data:[^,]+,/, ''), 'base64')
       const png = await upscaleImage(token, input.toString('base64'))
       const saved = await saveGeneratedImage({
@@ -851,7 +931,7 @@ export function registerIpcHandlers(ctx: { dbVersion: number; queue: GenerationQ
       })
       void fetchAnlasBalance(token).then(({ anlas, tier, usage }) => {
         if (anlas !== null) {
-          logBalance(anlas)
+          logBalance(anlas, account.id)
           broadcast('anlas:balance', { anlas, tier, ...(usage ? { usage } : {}) })
         }
       })
@@ -877,11 +957,22 @@ export function registerIpcHandlers(ctx: { dbVersion: number; queue: GenerationQ
   })
 
   handle('director:run', async ({ method, imageBase64, prompt, defry }) => {
+    const account = getActiveNaiAccount()
     const token = getNaiToken()
-    if (!token) return { error: t('ui.naiTokenIsNotConfigured') }
+    if (!account || !token) return { error: t('ui.naiTokenIsNotConfigured') }
     try {
       const input = Buffer.from(imageBase64.replace(/^data:[^,]+,/, ''), 'base64')
       const meta = await sharp(input).metadata()
+      const blocked = await anlasGuardBlockForDirect({ id: account.id, token }, (balance) =>
+        directorCharge(
+          method,
+          meta.width ?? 0,
+          meta.height ?? 0,
+          balance.tier === 'opus',
+          balance.tier !== null
+        )
+      )
+      if (blocked) return { error: blocked }
       const png = await augmentImage(token, {
         method,
         imageBase64: input.toString('base64'),
@@ -899,7 +990,7 @@ export function registerIpcHandlers(ctx: { dbVersion: number; queue: GenerationQ
       // 잔액 갱신 (디렉터 툴도 Anlas 소모, Opus는 소형 무료)
       void fetchAnlasBalance(token).then(({ anlas, tier, usage }) => {
         if (anlas !== null) {
-          logBalance(anlas)
+          logBalance(anlas, account.id)
           broadcast('anlas:balance', { anlas, tier, ...(usage ? { usage } : {}) })
         }
       })
@@ -988,5 +1079,18 @@ export function registerIpcHandlers(ctx: { dbVersion: number; queue: GenerationQ
     for (const win of BrowserWindow.getAllWindows()) win.setBackgroundColor(color)
   })
 
+  handle('window:getZoom', () => {
+    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+    return { factor: win ? win.webContents.getZoomFactor() : 1 }
+  })
+
+  handle('window:zoom', ({ command }) => {
+    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+    if (!win || !['in', 'out', 'reset'].includes(command)) return { factor: 1 }
+    return { factor: applyZoom(win.webContents, command) }
+  })
+
+  bindSceneReservationRecovery(ctx.queue, () => broadcast('scenes:reservationsChanged', {}))
   ctx.queue.on('changed', (status) => broadcast('queue:changed', status))
+  ctx.queue.on('halted', (halt: QueueHalt) => broadcast('queue:halted', halt))
 }

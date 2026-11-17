@@ -9,17 +9,27 @@ import {
   Keyboard,
   KeyRound,
   Image as ImageIcon,
+  Minus,
   Palette,
+  Plus,
   RotateCcw,
   Trash2,
   Upload
 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
-import { displayOpusUsagePercent, opusUsagePercentSegments } from '@shared/anlas'
+import {
+  displayOpusUsagePercent,
+  formatOpusUsageRefill,
+  opusUsagePercentSegments,
+  opusUsagePurchasedPercent
+} from '@shared/anlas'
+import { normalizeDailyAnlasCap } from '@shared/anlas-guard'
 import { isLang, LANGUAGES, SUPPORTED_LANGUAGES, type MessageId } from '@shared/i18n'
-import type { NaiAccountInfo } from '@shared/types'
+import type { NaiAccountInfo, NaiTokenStoreLockReason } from '@shared/types'
 import discordSvg from '../assets/discord.svg'
 import nais3Logo from '../assets/nais3-logo.svg'
+import { importBackup } from '../lib/backup-import'
+import { useBoolSetting, useSaveDir, useSetting } from '../lib/setting-hooks'
 import { playChime } from '../lib/completion-alert'
 import { useLanguageStore, useT } from '../lib/i18n'
 import { cn } from '../lib/utils'
@@ -28,13 +38,6 @@ import { useDirectorStore } from '../stores/director-store'
 import { useGenerationStore } from '../stores/generation-store'
 import { useLayoutStore, type CenterMode } from '../stores/layout-store'
 import { useThemeStore } from '../stores/theme-store'
-import { useCharactersStore } from '../stores/characters-store'
-import { useFragmentsStore } from '../stores/fragments-store'
-import { useVibesStore, useCharRefsStore } from '../stores/refs-store'
-import { usePromptPresetsStore } from '../stores/prompt-presets-store'
-import { loadCasts, useScenesStore } from '../stores/scenes-store'
-import { useScenePlusStore } from '../stores/scene-plus-store'
-import { useLibraryStore } from '../stores/library-store'
 import { useUpdateStore } from '../stores/update-store'
 import { askConfirm } from '../stores/dialog-store'
 import { toast } from '../stores/toast-store'
@@ -45,6 +48,7 @@ import {
   useShortcutsStore,
   type ShortcutAction
 } from '../stores/shortcuts-store'
+import { NaiTokenStoreLockNotice } from './nai-token-store-lock-notice'
 import { ThemeToggle } from './theme-toggle'
 import { Button } from './ui/button'
 import { Dialog, DialogContent, DialogTitle } from './ui/dialog'
@@ -145,6 +149,7 @@ function AppearanceSection(): React.JSX.Element {
           onChange={(e) => setUiFont(e.target.value)}
         />
       </Row>
+      {window.nais.runtime !== 'browser' && <AppZoomRow />}
       <Row label={t('ui.uiSizeValuePx', uiSize)}>
         <Slider
           className="w-44"
@@ -174,6 +179,64 @@ function AppearanceSection(): React.JSX.Element {
         <PageToggles />
       </Row>
     </div>
+  )
+}
+
+/** 앱 화면 배율 — 단축키(Cmd/Ctrl + = · - · 0)를 몰라도 되돌릴 수 있게 */
+function AppZoomRow(): React.JSX.Element {
+  const t = useT()
+  const [factor, setFactor] = useState(1)
+
+  useEffect(() => {
+    let active = true
+    void window.nais.invoke('window:getZoom', undefined).then((res) => {
+      if (active) setFactor(res.factor)
+    })
+    const off = window.nais.on('window:zoomChanged', (res) => setFactor(res.factor))
+    return () => {
+      active = false
+      off()
+    }
+  }, [])
+
+  const zoom = (command: 'in' | 'out' | 'reset'): void => {
+    void window.nais.invoke('window:zoom', { command }).then((res) => setFactor(res.factor))
+  }
+  const percent = Math.round(factor * 100)
+  const shortcut = formatCombo('Mod')
+
+  return (
+    <Row label={t('ui.appZoomValuePercent', percent)} hint={t('ui.appZoomShortcutsHint', shortcut)}>
+      <div className="flex items-center gap-1">
+        <Button
+          size="icon"
+          variant="ghost"
+          aria-label={t('ui.zoomOut')}
+          title={t('ui.zoomOut')}
+          onClick={() => zoom('out')}
+        >
+          <Minus size={14} />
+        </Button>
+        <Button
+          size="icon"
+          variant="ghost"
+          aria-label={t('ui.zoomIn')}
+          title={t('ui.zoomIn')}
+          onClick={() => zoom('in')}
+        >
+          <Plus size={14} />
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="gap-1"
+          disabled={percent === 100}
+          onClick={() => zoom('reset')}
+        >
+          <RotateCcw size={12} /> {t('ui.resetTo100')}
+        </Button>
+      </div>
+    </Row>
   )
 }
 
@@ -291,6 +354,7 @@ function GenerationSection(): React.JSX.Element {
           onCheckedChange={setDirectorInstantRun}
         />
       </Row>
+      {window.nais.runtime !== 'browser' && <AnlasGuardRows />}
       <Row
         label={t('ui.generationDelayValueS', (delay / 1000).toFixed(1))}
         hint={t('ui.intervalBetweenConsecutiveGenerations')}
@@ -385,6 +449,77 @@ function GenerationSection(): React.JSX.Element {
   )
 }
 
+/** 무료 범위 지킴이 — 메인 프로세스 큐에서만 지켜지므로 브라우저 버전에선 숨긴다 */
+function AnlasGuardRows(): React.JSX.Element {
+  const t = useT()
+  const guard = useGenerationStore((s) => s.anlasGuard)
+  const setGuard = useGenerationStore((s) => s.setAnlasGuard)
+  const [capText, setCapText] = useState(String(guard.dailyCap))
+  const [shownCap, setShownCap] = useState(guard.dailyCap)
+  const [spentToday, setSpentToday] = useState<number | null>(null)
+
+  // 저장된 상한이 바뀌면 입력란도 맞춘다 (렌더 중 동기화 — effect에서 setState하지 않게)
+  if (shownCap !== guard.dailyCap) {
+    setShownCap(guard.dailyCap)
+    setCapText(String(guard.dailyCap))
+  }
+  // 생성 후 잔액이 갱신되면(메인이 로그를 먼저 남김) 오늘 사용량도 다시 읽는다
+  useEffect(() => {
+    const refresh = (): void => {
+      void window.nais.invoke('nai:anlasUsage', undefined).then(({ today }) => setSpentToday(today))
+    }
+    refresh()
+    return window.nais.on('anlas:balance', refresh)
+  }, [])
+
+  const commitCap = (): void => {
+    const dailyCap = normalizeDailyAnlasCap(capText)
+    setCapText(String(dailyCap))
+    if (dailyCap !== guard.dailyCap) setGuard({ dailyCap })
+  }
+  const overCap = guard.dailyCapEnabled && spentToday !== null && spentToday >= guard.dailyCap
+
+  return (
+    <>
+      <Row label={t('ui.anlasGuardBlockPaid')} hint={t('ui.anlasGuardBlockPaidHint')}>
+        <Switch
+          aria-label={t('ui.anlasGuardBlockPaid')}
+          checked={guard.blockPaid}
+          onCheckedChange={(blockPaid) => setGuard({ blockPaid })}
+        />
+      </Row>
+      <Row label={t('ui.anlasGuardDailyCap')} hint={t('ui.anlasGuardDailyCapHint')}>
+        <div className="flex items-center gap-2">
+          <span
+            className={cn('text-[11.5px] tabular-nums', overCap ? 'text-danger-ink' : 'text-muted')}
+          >
+            {t('ui.anlasGuardTodayValueOfValue', spentToday ?? '-', guard.dailyCap)}
+          </span>
+          <Input
+            className="h-8 w-20 text-right font-mono"
+            aria-label={t('ui.anlasGuardDailyCapAmount')}
+            type="number"
+            min={0}
+            step={10}
+            inputMode="numeric"
+            value={capText}
+            onChange={(e) => setCapText(e.target.value)}
+            onBlur={commitCap}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') e.currentTarget.blur()
+            }}
+          />
+          <Switch
+            aria-label={t('ui.anlasGuardDailyCap')}
+            checked={guard.dailyCapEnabled}
+            onCheckedChange={(dailyCapEnabled) => setGuard({ dailyCapEnabled })}
+          />
+        </div>
+      </Row>
+    </>
+  )
+}
+
 function DelayRangeControl({
   label,
   value,
@@ -426,15 +561,7 @@ function SaveDirRow({
   hint: string
 }): React.JSX.Element {
   const t = useT()
-  const [dir, setDir] = useState('')
-  const [isDefault, setIsDefault] = useState(true)
-  const refresh = (): void => {
-    void window.nais.invoke('settings:getSaveDir', { target }).then((r) => {
-      setDir(r.dir)
-      setIsDefault(r.isDefault)
-    })
-  }
-  useEffect(refresh, [target])
+  const { dir, isDefault, refresh } = useSaveDir(target)
   return (
     <div className="flex flex-col gap-1.5">
       <div>
@@ -477,25 +604,10 @@ function SaveDirRow({
 
 function StorageSection(): React.JSX.Element {
   const t = useT()
-  const [autoSave, setAutoSave] = useState(true)
-  const [format, setFormat] = useState('png')
-  const [dateFolders, setDateFolders] = useState(true)
-  const [historyDeleteFile, setHistoryDeleteFile] = useState(false)
-
-  useEffect(() => {
-    void window.nais
-      .invoke('settings:get', { key: 'auto_save' })
-      .then(({ value }) => setAutoSave(value !== '0'))
-    void window.nais
-      .invoke('settings:get', { key: 'image_format' })
-      .then(({ value }) => setFormat(value || 'png'))
-    void window.nais
-      .invoke('settings:get', { key: 'date_folders' })
-      .then(({ value }) => setDateFolders(value !== '0'))
-    void window.nais
-      .invoke('settings:get', { key: 'history_delete_file' })
-      .then(({ value }) => setHistoryDeleteFile(value === '1'))
-  }, [])
+  const [autoSave, setAutoSave] = useBoolSetting('auto_save', true)
+  const [format, setFormat] = useSetting('image_format', 'png')
+  const [dateFolders, setDateFolders] = useBoolSetting('date_folders', true)
+  const [historyDeleteFile, setHistoryDeleteFile] = useBoolSetting('history_delete_file', false)
 
   return (
     <div className="flex flex-col gap-3">
@@ -504,14 +616,7 @@ function StorageSection(): React.JSX.Element {
           label={t('ui.autoSave')}
           hint={t('ui.whenOffMainGenerationsAreNotSavedToFilesHistoryKeepsOnlyTheLast28457b8e')}
         >
-          <Switch
-            aria-label={t('ui.autoSave')}
-            checked={autoSave}
-            onCheckedChange={(v) => {
-              setAutoSave(v)
-              void window.nais.invoke('settings:set', { key: 'auto_save', value: v ? '1' : '0' })
-            }}
-          />
+          <Switch aria-label={t('ui.autoSave')} checked={autoSave} onCheckedChange={setAutoSave} />
         </Row>
         <Row
           label={t('ui.dateFolders')}
@@ -520,10 +625,7 @@ function StorageSection(): React.JSX.Element {
           <Switch
             aria-label={t('ui.dateFolders')}
             checked={dateFolders}
-            onCheckedChange={(v) => {
-              setDateFolders(v)
-              void window.nais.invoke('settings:set', { key: 'date_folders', value: v ? '1' : '0' })
-            }}
+            onCheckedChange={setDateFolders}
           />
         </Row>
         <Row
@@ -533,23 +635,11 @@ function StorageSection(): React.JSX.Element {
           <Switch
             aria-label={t('ui.alsoDeleteFilesWhenDeletingHistory')}
             checked={historyDeleteFile}
-            onCheckedChange={(v) => {
-              setHistoryDeleteFile(v)
-              void window.nais.invoke('settings:set', {
-                key: 'history_delete_file',
-                value: v ? '1' : '0'
-              })
-            }}
+            onCheckedChange={setHistoryDeleteFile}
           />
         </Row>
         <Row label={t('ui.imageFormat')} hint={t('ui.webpFilesAreSmaller')}>
-          <Select
-            value={format}
-            onValueChange={(v) => {
-              setFormat(v)
-              void window.nais.invoke('settings:set', { key: 'image_format', value: v })
-            }}
-          >
+          <Select value={format} onValueChange={setFormat}>
             <SelectTrigger className="w-28" aria-label={t('ui.imageFormat')}>
               <SelectValue />
             </SelectTrigger>
@@ -637,28 +727,7 @@ function BackupButtons(): React.JSX.Element {
             danger: true
           })
           if (!ok) return
-          const r = await window.nais.invoke('backup:import', undefined)
-          if ('canceled' in r) return
-          if ('error' in r) {
-            toast(t('ui.importErrorValue', r.error), 'error')
-            return
-          }
-          toast(r.summary, 'success')
-          // 관련 스토어 새로고침
-          void useCharactersStore.getState().load()
-          void useFragmentsStore.getState().load()
-          void useVibesStore.getState().load()
-          void useCharRefsStore.getState().load()
-          void usePromptPresetsStore.getState().load()
-          void useScenesStore.getState().loadPresets()
-          useScenesStore.setState({ additions: {} })
-          void useScenesStore.getState().loadAdditionsEnabled()
-          void loadCasts(true)
-          useScenePlusStore.getState().selectScene(null)
-          void useScenePlusStore.getState().load()
-          useLibraryStore.getState().openStack(null)
-          // 메인 프롬프트가 바뀌었으면 재하이드레이트
-          if (r.needsPromptReload) void useGenerationStore.getState().hydrate()
+          await importBackup()
         }}
       >
         <Download size={14} /> {t('ui.import')}
@@ -728,9 +797,17 @@ function AccountSection(): React.JSX.Element {
   const [status, setStatus] = useState<'idle' | 'checking' | 'ok' | 'fail'>('idle')
   const [message, setMessage] = useState('')
   const [accounts, setAccounts] = useState<NaiAccountInfo[]>([])
+  // 저장된 토큰이 있지만 지금은 읽을 수 없는 이유 (키체인 잠김 / 값 손상)
+  const [lockReason, setLockReason] = useState<NaiTokenStoreLockReason | null>(null)
+  const locked = lockReason !== null
+  // OS 키체인을 쓸 수 없어 새로 저장하는 토큰이 평문(base64)으로 저장되는 실행
+  const [plaintextStorage, setPlaintextStorage] = useState(false)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [revealed, setRevealed] = useState<Record<string, string>>({})
   const [usage, setUsage] = useState<{ today: number; week: number } | null>(null)
+  // 계정 자동 전환 (기본 켜짐) — 브라우저 버전은 전환하지 않는다
+  const [autoSwitch, setAutoSwitch] = useState(true)
+  const canAutoSwitch = window.nais.runtime !== 'browser' && accounts.length > 1
   const anlasBalance = useGenerationStore((s) => s.anlasBalance)
   const opusUsage = useGenerationStore((s) => s.opusUsage)
   const subscriptionTier = useGenerationStore((s) => s.subscriptionTier)
@@ -738,9 +815,13 @@ function AccountSection(): React.JSX.Element {
 
   const refresh = useCallback(
     (includeBalance = true): void => {
-      void window.nais.invoke('nai:listAccounts', undefined).then(({ accounts: next }) => {
-        setAccounts(next)
-      })
+      void window.nais
+        .invoke('nai:listAccounts', undefined)
+        .then(({ accounts: next, lockReason: nextLockReason, plaintextStorage: plaintext }) => {
+          setAccounts(next)
+          setLockReason(nextLockReason)
+          setPlaintextStorage(plaintext)
+        })
       void window.nais.invoke('nai:anlasUsage', undefined).then(setUsage)
       if (includeBalance) void refreshAnlas().catch(() => undefined)
     },
@@ -750,6 +831,11 @@ function AccountSection(): React.JSX.Element {
     refresh()
     return window.nais.on('nai:accountChanged', () => refresh(false))
   }, [refresh])
+  useEffect(() => {
+    void window.nais
+      .invoke('settings:get', { key: 'nai_auto_switch' })
+      .then(({ value }) => setAutoSwitch(value !== '0'))
+  }, [])
 
   async function toggleReveal(id: string): Promise<void> {
     if (revealed[id]) {
@@ -812,7 +898,14 @@ function AccountSection(): React.JSX.Element {
     if (!ok) return
     setBusyId(account.id)
     try {
-      const { activeId } = await window.nais.invoke('nai:deleteAccount', { id: account.id })
+      const { activeId, locked: storeLocked } = await window.nais.invoke('nai:deleteAccount', {
+        id: account.id
+      })
+      // 저장소를 읽을 수 없어 지우지 못했다 — 잔액을 비우지 말고 잠김 안내를 다시 읽어 보여 준다
+      if (storeLocked) {
+        refresh(false)
+        return
+      }
       setRevealed((current) => {
         const next = { ...current }
         delete next[account.id]
@@ -835,6 +928,7 @@ function AccountSection(): React.JSX.Element {
 
   const activeAccount = accounts.find((account) => account.active)
   const opusUsageSegments = opusUsage ? opusUsagePercentSegments(opusUsage) : [0]
+  const opusPurchased = opusUsage ? opusUsagePurchasedPercent(opusUsage) : 0
 
   return (
     <div className="flex min-h-full min-w-0 flex-col gap-3 overflow-x-hidden">
@@ -847,12 +941,21 @@ function AccountSection(): React.JSX.Element {
         </p>
       </div>
 
+      {lockReason && (
+        <NaiTokenStoreLockNotice
+          reason={lockReason}
+          plaintextStorage={plaintextStorage}
+          onCleared={() => refresh(false)}
+        />
+      )}
+
       <div className="grid min-w-0 grid-cols-[7rem_minmax(0,1fr)_auto] gap-1.5">
         <Input
           className="w-28 shrink-0"
           value={label}
           placeholder={t('ui.accountValue', accounts.length + 1)}
           maxLength={60}
+          disabled={locked}
           onChange={(e) => setLabel(e.target.value)}
         />
         <Input
@@ -861,27 +964,36 @@ function AccountSection(): React.JSX.Element {
           placeholder="pst-..."
           autoComplete="off"
           spellCheck={false}
+          disabled={locked}
           onChange={(e) => {
             setDraft(e.target.value)
             setStatus('idle')
           }}
           onKeyDown={(e) => e.key === 'Enter' && void addAccount()}
         />
-        <Button variant="accent" disabled={status === 'checking'} onClick={() => void addAccount()}>
+        <Button
+          variant="accent"
+          disabled={status === 'checking' || locked}
+          onClick={() => void addAccount()}
+        >
           {status === 'checking' ? t('ui.checking') : t('ui.add')}
         </Button>
       </div>
+      {plaintextStorage && !locked && (
+        <p className="text-[11.5px] text-danger-ink">{t('ui.naiTokenPlaintextStorageWarning')}</p>
+      )}
       {status === 'ok' && <span className="text-[12px] text-accent-ink">{message}</span>}
       {status === 'fail' && <span className="text-[12px] text-danger-ink">{message}</span>}
 
       <div className="min-w-0 space-y-1.5">
-        {accounts.length === 0 ? (
+        {accounts.length === 0 && !locked ? (
           <div className="rounded-lg border border-dashed border-line p-4 text-center text-[11.5px] text-faint">
             {t('ui.noAccountsRegistered')}
           </div>
         ) : (
           accounts.map((account) => {
             const percent = account.usage ? displayOpusUsagePercent(account.usage) : null
+            const purchased = account.usage ? opusUsagePurchasedPercent(account.usage) : 0
             const masked = `${account.prefix}${'*'.repeat(Math.max(4, account.length - 8))}${account.suffix}`
             return (
               <div
@@ -919,7 +1031,9 @@ function AccountSection(): React.JSX.Element {
                         ? t('ui.v5GaugeUnavailable')
                         : account.usage?.isNegative
                           ? t('ui.v5ValueDepleted', percent)
-                          : `V5 ${percent}%`
+                          : purchased > 0
+                            ? `V5 ${percent}% · ${t('ui.v5ExtraUsageValue', purchased)}`
+                            : `V5 ${percent}%`
                       : account.tier
                         ? `Anlas ${account.anlas?.toLocaleString() ?? '—'}`
                         : t('ui.statusUnavailable')}
@@ -949,6 +1063,22 @@ function AccountSection(): React.JSX.Element {
         )}
       </div>
 
+      {canAutoSwitch && (
+        <Row label={t('ui.autoSwitchNaiAccounts')} hint={t('ui.autoSwitchNaiAccountsHint')}>
+          <Switch
+            aria-label={t('ui.autoSwitchNaiAccounts')}
+            checked={autoSwitch}
+            onCheckedChange={(v) => {
+              setAutoSwitch(v)
+              void window.nais.invoke('settings:set', {
+                key: 'nai_auto_switch',
+                value: v ? '1' : '0'
+              })
+            }}
+          />
+        </Row>
+      )}
+
       {activeAccount && subscriptionTier === 'opus' && (
         <div className="min-w-0 rounded-lg border border-line bg-surface-2/50 p-3">
           <div className="mb-2 flex items-center justify-between gap-2">
@@ -973,7 +1103,7 @@ function AccountSection(): React.JSX.Element {
               <div key={index} className="h-full min-w-0 overflow-hidden rounded-full bg-paper">
                 <div
                   className={cn(
-                    'h-full rounded-full transition-[width] duration-300',
+                    'h-full rounded-full transition-[width] duration-300 motion-reduce:transition-none',
                     opusUsage?.isNegative ? 'bg-danger' : 'bg-accent'
                   )}
                   style={{ width: `${percent}%` }}
@@ -982,16 +1112,17 @@ function AccountSection(): React.JSX.Element {
             ))}
           </div>
           <p className="mt-2 text-[10.5px] text-muted">
+            {/* 소진 상태에서도 충전 속도·중단 여부를 함께 보여 준다 */}
             {opusUsage
               ? opusUsage.isNegative
-                ? accounts.length > 1
-                  ? t('ui.depletedWillSwitchToAnAvailableAccountBeforeTheNextV5Generation')
-                  : t('ui.depletedV5GenerationsWillUseAnlasUntilItRecharges')
-                : t(
-                    'ui.aboutValueHUntilTheNext1',
-                    Math.max(0, opusUsage.timeUntilNextPercent / 3600).toFixed(1)
-                  )
+                ? `${
+                    canAutoSwitch && autoSwitch
+                      ? t('ui.depletedWillSwitchToAnAvailableAccountBeforeTheNextV5Generation')
+                      : t('ui.depletedV5GenerationsWillUseAnlasUntilItRecharges')
+                  } · ${formatOpusUsageRefill(opusUsage, t)}`
+                : formatOpusUsageRefill(opusUsage, t)
               : t('ui.checkingUsage')}
+            {opusPurchased > 0 && ` · ${t('ui.v5ExtraUsageValue', opusPurchased)}`}
           </p>
         </div>
       )}

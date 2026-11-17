@@ -1,14 +1,24 @@
-import { BrowserWindow, dialog } from 'electron'
+import { BrowserWindow } from 'electron'
+import { showOpenDialog, showSaveDialog } from '../dialogs'
 import { readFileSync, unlinkSync, writeFileSync } from 'fs'
 import { extname, isAbsolute, relative } from 'path'
 import JSZip from 'jszip'
 import { planSceneReservations } from '../../shared/scene-request'
 import type { GenerationQueue } from '../queue/generation-queue'
-import type { IpcInvokeMap, Scene, SceneImage, ScenePreset } from '../../shared/types'
+import type {
+  IpcInvokeMap,
+  QueueItem,
+  Scene,
+  SceneImage,
+  ScenePreset,
+  SceneReservation
+} from '../../shared/types'
 import { getDb } from '../db'
 import { dropMemoryImage, isMemoryPath, libraryRoot, storedThumbnailUrl } from '../images/storage'
 import { t } from '../i18n'
 import { applySceneCharacterAddition } from './addition-repo'
+import { sceneEvents } from './events'
+import { parseSceneImport } from './import-formats'
 
 interface Row {
   id: number
@@ -133,10 +143,17 @@ export function deletePreset(id: number): void {
   const db = getDb()
   const count = (db.prepare('SELECT COUNT(*) AS c FROM scene_presets').get() as { c: number }).c
   if (count <= 1) return
+  const scenes = db.prepare('SELECT id FROM gen_scenes WHERE preset_id = ?').all(id) as {
+    id: number
+  }[]
   db.transaction(() => {
     db.prepare('DELETE FROM gen_scenes WHERE preset_id = ?').run(id)
     db.prepare('DELETE FROM scene_presets WHERE id = ?').run(id)
   })()
+  sceneEvents.emit(
+    'deleted',
+    scenes.map((scene) => scene.id)
+  )
 }
 
 // ── 씬 ──────────────────────────────────────────────────
@@ -269,6 +286,7 @@ export function updateScene(id: number, patch: Record<string, unknown>): void {
 
 export function deleteScene(id: number): void {
   getDb().prepare('DELETE FROM gen_scenes WHERE id = ?').run(id)
+  sceneEvents.emit('deleted', [id])
 }
 
 export function reorderScenes(ids: number[]): void {
@@ -285,13 +303,12 @@ export function setReserveAll(presetId: number, count: number): void {
     .run(count, presetId)
 }
 
-/** No asynchronous boundary may separate the reservation snapshot and queue commit. */
-export function enqueueReservedScenes(
-  queue: GenerationQueue,
-  { casts, seedLocked }: IpcInvokeMap['scenes:enqueueReserved']['req']
-): string[] {
-  const db = getDb()
-  const rows = db
+/** 예약된 씬을 큐 요청으로 펼친다 — DB는 바꾸지 않는다 (예약 전 Anlas 가드 확인에도 쓴다) */
+export function planReservedScenes({
+  casts,
+  seedLocked
+}: IpcInvokeMap['scenes:enqueueReserved']['req']): ReturnType<typeof planSceneReservations> {
+  const rows = getDb()
     .prepare(
       `
     SELECT s.* FROM gen_scenes s
@@ -302,15 +319,73 @@ export function enqueueReservedScenes(
     )
     .all() as Row[]
   const scenes = rows.map((row) => toScene({ ...row, image_count: 0 }))
-  const { requests, remaining } = planSceneReservations(scenes, casts, seedLocked, () =>
+  return planSceneReservations(scenes, casts, seedLocked, () =>
     Math.floor(Math.random() * 4294967295)
   )
+}
+
+/** No asynchronous boundary may separate the reservation snapshot and queue commit. */
+export function enqueueReservedScenes(
+  queue: GenerationQueue,
+  request: IpcInvokeMap['scenes:enqueueReserved']['req']
+): string[] {
+  const db = getDb()
+  const { requests, reservations, remaining } = planReservedScenes(request)
   return queue.enqueueRequests(
     requests.map(applySceneCharacterAddition),
     db.transaction(() => {
       for (const [id, reserves] of remaining) setSceneReserves(id, reserves)
-    })
+    }),
+    reservations
   )
+}
+
+/** Add cancelled reservations back to their scenes; scenes deleted meanwhile are skipped. */
+function restoreReservations(reservations: SceneReservation[]): boolean {
+  const db = getDb()
+  return db.transaction(() => {
+    const byScene = new Map<number, Record<string, number>>()
+    for (const { sceneId, castId } of reservations) {
+      let reserves = byScene.get(sceneId)
+      if (!reserves) {
+        const row = db.prepare('SELECT reserve_json FROM gen_scenes WHERE id = ?').get(sceneId) as
+          { reserve_json: string | null } | undefined
+        if (!row) continue // Deleting a scene while generating must not recreate it.
+        reserves = parseReserves(row.reserve_json)
+        byScene.set(sceneId, reserves)
+      }
+      reserves[castId] = (reserves[castId] ?? 0) + 1
+    }
+    for (const [id, reserves] of byScene) setSceneReserves(id, reserves)
+    return byScene.size > 0
+  })()
+}
+
+/** Return only cancelled handoff items to their original scene/cast, preserving new reservations. */
+export function bindSceneReservationRecovery(
+  queue: GenerationQueue,
+  onRestored: () => void
+): () => void {
+  const restore = (items: QueueItem[]): void => {
+    const reservations = items.flatMap((item) => (item.reservation ? [item.reservation] : []))
+    if (reservations.length === 0) return
+    // The queue emits from inside cancel() and its run loop, so a DB error here must not escape.
+    let restored: boolean
+    try {
+      restored = restoreReservations(reservations)
+    } catch (error) {
+      console.error('Failed to restore cancelled scene reservations:', error)
+      return
+    }
+    if (restored) onRestored()
+  }
+  queue.on('cancelled', restore)
+  const forget = (ids: number[]): void => queue.detachDeletedScenes(ids)
+  sceneEvents.on('deleted', forget)
+  return () => {
+    queue.off('cancelled', restore)
+    sceneEvents.off('deleted', forget)
+  }
 }
 
 /** 모든 프리셋의 예약 총합 */
@@ -354,6 +429,7 @@ export function bulkDelete(ids: number[]): void {
   getDb()
     .prepare(`DELETE FROM gen_scenes WHERE id IN (${placeholders(ids.length)})`)
     .run(...ids)
+  sceneEvents.emit('deleted', ids)
 }
 
 export function bulkSetResolution(ids: number[], width: number, height: number): void {
@@ -520,7 +596,7 @@ export async function exportScenesJson(presetId: number): Promise<boolean> {
     )
     .all(presetId) as Row[]
   const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
-  const result = await dialog.showSaveDialog(win, {
+  const result = await showSaveDialog(win, {
     title: t('ui.exportScenes'),
     defaultPath: 'nais3-scenes.json',
     filters: [{ name: 'JSON', extensions: ['json'] }]
@@ -537,26 +613,18 @@ export async function exportScenesJson(presetId: number): Promise<boolean> {
   return true
 }
 
-export async function importScenesJson(presetId: number): Promise<number> {
+export async function importScenesJson(
+  presetId: number
+): Promise<IpcInvokeMap['scenes:importJson']['res']> {
   const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
-  const result = await dialog.showOpenDialog(win, {
+  const result = await showOpenDialog(win, {
     title: t('ui.importScenes'),
     properties: ['openFile'],
     filters: [{ name: 'JSON', extensions: ['json'] }]
   })
-  if (result.canceled || result.filePaths.length === 0) return 0
-  const parsed = JSON.parse(readFileSync(result.filePaths[0], 'utf-8')) as {
-    scenes?: {
-      name?: string
-      prompt?: string
-      /** NAIS2 씬 내보내기(JSON) 포맷의 프롬프트 필드명 */
-      scenePrompt?: string
-      negativePrompt?: string
-      width?: number
-      height?: number
-    }[]
-  }
-  const scenes = parsed.scenes ?? []
+  if (result.canceled || result.filePaths.length === 0) return { count: 0, canceled: true }
+  const scenes = parseSceneImport(readFileSync(result.filePaths[0], 'utf-8'))
+  if (!scenes) return { count: 0, unrecognized: true }
   const db = getDb()
   const max = db
     .prepare('SELECT COALESCE(MAX(sort_order), 0) AS m FROM gen_scenes WHERE preset_id = ?')
@@ -570,7 +638,7 @@ export async function importScenesJson(presetId: number): Promise<number> {
       stmt.run(
         presetId,
         s.name ?? t('ui.scene'),
-        s.prompt ?? s.scenePrompt ?? '', // NAIS2 파일은 scenePrompt
+        s.prompt,
         s.negativePrompt ?? '',
         s.width ?? 832,
         s.height ?? 1216,
@@ -578,7 +646,7 @@ export async function importScenesJson(presetId: number): Promise<number> {
       )
     }
   })()
-  return scenes.length
+  return { count: scenes.length }
 }
 
 type ZipEntry = { file_path: string; name: string }
@@ -586,7 +654,7 @@ type ZipEntry = { file_path: string; name: string }
 export async function zipFiles(entries: ZipEntry[], defaultName: string): Promise<number> {
   if (entries.length === 0) return 0
   const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
-  const result = await dialog.showSaveDialog(win, {
+  const result = await showSaveDialog(win, {
     title: t('ui.exportZip'),
     defaultPath: defaultName,
     filters: [{ name: 'ZIP', extensions: ['zip'] }]

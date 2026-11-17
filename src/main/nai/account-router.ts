@@ -1,8 +1,10 @@
+import { isOpusUsageDepleted } from '../../shared/anlas'
 import { inpaintingModelFor, isV5Model } from '../../shared/nai-models'
 import type { GenerationRequest, OpusUsageStatus, SubscriptionInfo } from '../../shared/types'
 import {
   getActiveNaiAccount,
   getNaiAccounts,
+  getSetting,
   setActiveNaiAccount,
   type StoredNaiAccount
 } from '../db/settings'
@@ -13,6 +15,8 @@ export interface NaiAccountBalance {
   anlas: number | null
   tier: SubscriptionInfo['tier'] | null
   usage?: OpusUsageStatus
+  /** 유료 구독 만료 — 게이지가 없어 V5 생성에 Anlas를 쓴다 */
+  expired?: boolean
 }
 
 export interface NaiAccountSelection {
@@ -21,12 +25,10 @@ export interface NaiAccountSelection {
   rotated: boolean
 }
 
+/** 구독이 만료된 계정도 게이지를 쓸 수 없으니 소진된 것과 같이 다른 계정을 찾는다. */
 export function isOpusUsageExhausted(balance: NaiAccountBalance): boolean {
-  return (
-    balance.tier === 'opus' &&
-    !!balance.usage &&
-    (balance.usage.isNegative || balance.usage.percent <= 0)
-  )
+  if (balance.expired) return true
+  return balance.tier === 'opus' && !!balance.usage && isOpusUsageDepleted(balance.usage)
 }
 
 /** 실제 서버에 전달될 모델이 V5 충전 게이지를 쓰는지 판정한다. */
@@ -36,12 +38,7 @@ export function requestUsesV5Usage(request: GenerationRequest): boolean {
 }
 
 function hasAvailableOpusUsage(balance: NaiAccountBalance): boolean {
-  return (
-    balance.tier === 'opus' &&
-    !!balance.usage &&
-    !balance.usage.isNegative &&
-    balance.usage.percent > 0
-  )
+  return balance.tier === 'opus' && !!balance.usage && !isOpusUsageDepleted(balance.usage)
 }
 
 /**
@@ -77,17 +74,25 @@ export async function chooseNaiAccount(
   return { account: active, balance: activeBalance, rotated: false }
 }
 
-export async function resolveNaiAccountForGeneration(
+/** 활성 계정은 바꾸지 않고 다음 생성에 쓸 계정만 고른다 (보내기 전 Anlas 가드 확인용) */
+export async function previewNaiAccountForGeneration(
   usesV5Usage: boolean
 ): Promise<NaiAccountSelection | null> {
   const active = getActiveNaiAccount()
   if (!active) return null
-  const selection = await chooseNaiAccount(
-    getNaiAccounts(),
-    active.id,
-    usesV5Usage,
-    fetchAnlasBalance
-  )
+  // 자동 전환을 끄면 게이지가 바닥나도 지금 계정으로 (Anlas를 써서) 생성한다
+  const autoSwitch = getSetting('nai_auto_switch') !== '0'
+  return chooseNaiAccount(getNaiAccounts(), active.id, usesV5Usage && autoSwitch, fetchAnlasBalance)
+}
+
+export function commitNaiAccountSelection(selection: NaiAccountSelection): void {
   if (selection.rotated) setActiveNaiAccount(selection.account.id)
+}
+
+export async function resolveNaiAccountForGeneration(
+  usesV5Usage: boolean
+): Promise<NaiAccountSelection | null> {
+  const selection = await previewNaiAccountForGeneration(usesV5Usage)
+  if (selection) commitNaiAccountSelection(selection)
   return selection
 }

@@ -533,10 +533,13 @@ export const useScenesStore = create<ScenesState>((set, get) => ({
         castId: cast?.id ?? '',
         request: buildCastRequest(cast)
       }))
-      await window.nais.invoke('scenes:enqueueReserved', {
+      // 브라우저 런타임은 이 채널에 결과를 돌려주지 않으므로(undefined) 구조 분해하지 않는다
+      const result = (await window.nais.invoke('scenes:enqueueReserved', {
         casts,
         seedLocked: useGenerationStore.getState().seedLocked
-      })
+      })) as { blocked?: string } | undefined
+      // 무료 범위 지킴이가 예약 전에 막음 — 예약은 그대로 남는다
+      if (result?.blocked) toast(result.blocked, 'error')
     } catch (error) {
       toast(error instanceof Error ? error.message : String(error), 'error')
     } finally {
@@ -560,10 +563,14 @@ export const useScenesStore = create<ScenesState>((set, get) => ({
       const castId = castIds[i]
       const cast = castId === '' ? null : (casts.find((c) => c.id === castId) ?? null)
       if (castId !== '' && !cast) continue
-      await window.nais.invoke('queue:enqueue', {
+      const { blocked } = await window.nais.invoke('queue:enqueue', {
         request: { ...applySceneRequest(buildCastRequest(cast), scene), seed: sceneSeed(i) },
         count: 1
       })
+      if (blocked) {
+        toast(blocked, 'error')
+        return
+      }
     }
   },
 
@@ -756,7 +763,7 @@ export async function loadCasts(force = false): Promise<void> {
 export function bindSceneEvents(): () => void {
   let timer: ReturnType<typeof setTimeout> | undefined
   let reloadSelected = false
-  return window.nais.on('scenes:changed', ({ sceneId, filePath }) => {
+  const offImages = window.nais.on('scenes:changed', ({ sceneId, filePath }) => {
     const st = useScenesStore.getState()
     // 완료 즉시 카드 낙관적 갱신 — 스트리밍 프레임이 사라진 뒤 옛 썸네일이 튀는 것 방지.
     // 새 원본을 바로 표시(thumbnailUrl 비워 thumbnailPath로 폴백), load()가 곧 정식 썸네일로 대체.
@@ -770,4 +777,13 @@ export function bindSceneEvents(): () => void {
       reloadSelected = false
     }, 300)
   })
+  const offReservations = window.nais.on('scenes:reservationsChanged', () => {
+    // Reservation-only changes must not increment image counts or replace thumbnails.
+    void useScenesStore.getState().load()
+  })
+  return () => {
+    clearTimeout(timer)
+    offImages()
+    offReservations()
+  }
 }

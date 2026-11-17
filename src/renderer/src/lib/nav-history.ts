@@ -1,5 +1,6 @@
 import { useLayoutStore, type CenterMode } from '../stores/layout-store'
 import { useScenesStore } from '../stores/scenes-store'
+import { useSidePageStore } from '../stores/side-page-store'
 
 /**
  * 앱 내 네비게이션 히스토리 — 마우스 4/5번(뒤로/앞으로) 버튼 지원.
@@ -13,7 +14,7 @@ interface View {
 }
 
 const MAX = 50
-let backStack: View[] = []
+const backStack: View[] = []
 let fwdStack: View[] = []
 let applying = false // 뒤로/앞으로 적용 중의 상태 변경은 기록하지 않음
 
@@ -42,7 +43,9 @@ export function recordNav(): void {
 function apply(v: View): void {
   applying = true
   try {
-    useLayoutStore.getState().setCenterMode(v.mode)
+    const layout = useLayoutStore.getState()
+    // 기록 뒤에 설정에서 숨긴 페이지로는 돌아가지 않는다 — 숨긴 웹 탭은 <webview>가 내려가 있어 빈 화면이 된다
+    layout.setCenterMode(v.mode !== 'main' && layout.hiddenPages.includes(v.mode) ? 'main' : v.mode)
     useScenesStore.getState().select(v.sceneId)
   } finally {
     applying = false
@@ -50,6 +53,12 @@ function apply(v: View): void {
 }
 
 export function goBack(): void {
+  // 옆으로 넘겨 놓은 편집 페이지는 현재 뷰 위의 한 장 — 뒤로 가기는 먼저 그 페이지를 덮는다
+  const sidePage = useSidePageStore.getState()
+  if (sidePage.page) {
+    sidePage.close()
+    return
+  }
   const v = backStack.pop()
   if (!v) return
   fwdStack.push(snapshot())

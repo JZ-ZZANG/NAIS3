@@ -6,7 +6,7 @@ import sharp from './sharp'
 import icon from '../../resources/icon.png?asset'
 import { closeDb, initDb, migrateInWorker } from './db'
 import migrationWorkerPath from './db/migrate.worker?modulePath'
-import { getSetting } from './db/settings'
+import { getSetting, markOnboardingPending } from './db/settings'
 import { preprocessRequest } from './fragments/request'
 import { effectiveSteps, inpaintingModelFor, modelCapabilities } from '../shared/nai-models'
 import { snapNaiResolution } from '../shared/nai-resolution'
@@ -25,9 +25,15 @@ import { resolveInitialLanguage, t } from './i18n'
 import { translate, type Lang, type MessageId } from '../shared/i18n'
 import { setupUpdater } from './updater'
 import { showMigrationProgress, type MigrationProgress } from './migration-window'
+import { watchZoomShortcuts } from './zoom'
 import { logBalance } from './nai/anlas-log'
 import { fetchAnlasBalance, generateImageStream, generateImageZip } from './nai/client'
-import { requestUsesV5Usage, resolveNaiAccountForGeneration } from './nai/account-router'
+import {
+  commitNaiAccountSelection,
+  previewNaiAccountForGeneration,
+  requestUsesV5Usage
+} from './nai/account-router'
+import { enforceGenerationGuard } from './nai/anlas-guard'
 import { localPromptMetadata } from './nai/payload'
 import { prepareCharRefs, prepareVibes } from './refs/prepare'
 import { GenerationQueue } from './queue/generation-queue'
@@ -82,6 +88,10 @@ function createWindow(): void {
   mainWindow.on('ready-to-show', () => {
     mainWindow.show()
   })
+
+  watchZoomShortcuts(mainWindow.webContents, (factor) =>
+    broadcast('window:zoomChanged', { factor })
+  )
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
@@ -162,6 +172,8 @@ const startup = app.whenReady().then(async () => {
     dbVersion = initialized.version
     // DB가 열린 직후 언어를 1회 확정·고정 (기존 설치는 한국어 유지)
     resolveInitialLanguage(initialized.isNewDatabase)
+    // 새 설치만 첫 실행 온보딩 — 렌더러가 끝나면 0으로 바꾼다
+    if (initialized.isNewDatabase) markOnboardingPending()
   } catch (e) {
     // DB를 못 열면 조용히 빈 상태로 시작하지 않는다 — 세이브 유실로 오인되는 최악의 UX
     const message = (id: MessageId): string =>
@@ -184,8 +196,12 @@ const startup = app.whenReady().then(async () => {
 
   // 생성 파이프라인: 큐 → 조각/와일드카드 치환 → 바이브/캐릭레퍼 준비 → 스트리밍 생성 → 저장
   const queue = new GenerationQueue(async (rawRequest, id, signal) => {
-    const selection = await resolveNaiAccountForGeneration(requestUsesV5Usage(rawRequest))
+    const selection = await previewNaiAccountForGeneration(requestUsesV5Usage(rawRequest))
     if (!selection) throw new Error(t('ui.naiTokenIsNotConfigured'))
+    // 무료 범위 지킴이 — 바이브 인코딩을 포함해 Anlas가 드는 요청은 보내기 전에 막는다.
+    // 막히면 계정 자동 전환도 반영하지 않는다
+    await enforceGenerationGuard(rawRequest, selection.account, selection.balance)
+    commitNaiAccountSelection(selection)
     const token = selection.account.token
     if (selection.rotated) {
       broadcast('nai:accountChanged', {
@@ -279,13 +295,19 @@ const startup = app.whenReady().then(async () => {
           signal
         )
 
-    const scene = request.sceneId ? getScene(request.sceneId) : null
+    // Read the scene at save time from the queue-owned request: deleting the scene during
+    // generation clears its sceneId (SQLite may hand the ID to a new scene). A scene that is
+    // gone anyway saves to plain history instead of failing after the Anlas were spent.
+    const sceneJob = request.sceneId !== undefined || request.scenePlusId !== undefined
+    const scene = rawRequest.sceneId ? getScene(rawRequest.sceneId) : null
+    const sceneId = scene ? scene.id : undefined
     const plusScene = request.scenePlusId ? getPlusScene(request.scenePlusId) : null
     const localMetadata = localPromptMetadata(request)
 
     // 자동저장 OFF: 메인 생성은 파일로 저장하지 않는다 — 원본은 메모리(최근 20장)에만,
     // 히스토리에는 썸네일 행으로 남는다 (NAIS2 방식). 씬 생성은 항상 씬 폴더에 저장.
-    const ephemeral = !scene && !plusScene && getSetting('auto_save') === '0'
+    // A scene job whose scene was deleted still keeps its paid original on disk.
+    const ephemeral = !sceneJob && getSetting('auto_save') === '0'
     const saved = ephemeral
       ? await saveEphemeralImage({
           png,
@@ -300,15 +322,9 @@ const startup = app.whenReady().then(async () => {
           png,
           sentPayload,
           seed: request.seed,
-          kind:
-            request.sceneId || request.scenePlusId
-              ? 'scene'
-              : source
-                ? source.maskBase64
-                  ? 'inpaint'
-                  : 'i2i'
-                : 't2i',
-          sceneId: request.sceneId,
+          kind: sceneJob ? 'scene' : source ? (source.maskBase64 ? 'inpaint' : 'i2i') : 't2i',
+          sceneId,
+          resolveSceneId: () => rawRequest.sceneId,
           scenePlusId: request.scenePlusId,
           format: imageFormat,
           sceneName: scene?.name ?? plusScene?.name,
@@ -321,8 +337,8 @@ const startup = app.whenReady().then(async () => {
         })
 
     // 씬 생성이면 해당 씬 갱신 알림 (목록 썸네일/개수, 상세 이미지 갱신용)
-    if (request.sceneId)
-      broadcast('scenes:changed', { sceneId: request.sceneId, filePath: saved.filePath })
+    if (saved.sceneId)
+      broadcast('scenes:changed', { sceneId: saved.sceneId, filePath: saved.filePath })
     if (request.scenePlusId) {
       linkPlusImage(saved.id, request.scenePlusId)
       broadcast('scenePlus:changed', { sceneId: request.scenePlusId, filePath: saved.filePath })
@@ -331,7 +347,7 @@ const startup = app.whenReady().then(async () => {
     // 생성 후 잔액 갱신 (실사용량 추적의 진실 공급원) — 실패해도 생성 흐름엔 영향 없음
     void fetchAnlasBalance(token).then(({ anlas, tier, usage }) => {
       if (anlas !== null) {
-        logBalance(anlas)
+        logBalance(anlas, selection.account.id)
         broadcast('anlas:balance', { anlas, tier, ...(usage ? { usage } : {}) })
       }
     })
@@ -352,7 +368,8 @@ const startup = app.whenReady().then(async () => {
   registerIpcHandlers({ dbVersion, queue })
 
   app.on('browser-window-created', (_, window) => {
-    optimizer.watchWindowShortcuts(window)
+    // zoom: false(기본값)는 Cmd/Ctrl+'-'를 막는다. 확대·축소 단축키는 watchZoomShortcuts가 처리한다
+    optimizer.watchWindowShortcuts(window, { zoom: true })
   })
 
   // mac dock 아이콘 (dev 미리보기용 — 패키징 앱은 icns 사용)

@@ -404,7 +404,16 @@ async function dispatch(channel: string, rawRequest: unknown): Promise<unknown> 
   }
   if (channel === 'nai:tokenStatus') {
     const account = activeAccount(await readBrowserState())
-    return { hasToken: !!account, prefix: account?.prefix ?? '', length: account?.length ?? 0 }
+    return {
+      hasToken: !!account,
+      prefix: account?.prefix ?? '',
+      length: account?.length ?? 0,
+      // 브라우저 저장소는 OS 키체인을 쓰지 않아 잠기지 않는다
+      locked: false,
+      lockReason: null,
+      // 브라우저 작업 공간의 저장 방식은 계정 설정에 따로 안내한다 (ui.browserAccountStorage)
+      plaintextStorage: false
+    }
   }
   if (channel === 'nai:revealToken')
     return { token: activeAccount(await readBrowserState())?.token ?? null }
@@ -430,7 +439,11 @@ async function dispatch(channel: string, rawRequest: unknown): Promise<unknown> 
         void token
         return account
       }),
-      activeId: state.activeAccountId
+      activeId: state.activeAccountId,
+      locked: false,
+      lockReason: null,
+      // 브라우저 작업 공간의 저장 방식은 계정 설정에 따로 안내한다 (ui.browserAccountStorage)
+      plaintextStorage: false
     }
   }
   if (channel === 'nai:addAccount') {
@@ -439,28 +452,28 @@ async function dispatch(channel: string, rawRequest: unknown): Promise<unknown> 
       request
     )
     if (!verification.valid) return verification
-    const accountId = await mutateBrowserState((state) => {
+    const { id: accountId, label } = await mutateBrowserState((state) => {
       const token = String(request.token).trim()
       const duplicate = state.accounts.find((account) => account.token === token)
       if (duplicate) {
         state.activeAccountId = duplicate.id
-        return duplicate.id
+        return duplicate
       }
-      const id = crypto.randomUUID()
-      state.accounts.push({
-        id,
+      const account = {
+        id: crypto.randomUUID(),
         label: String(request.label ?? '').trim() || `Account ${state.accounts.length + 1}`,
         token,
         prefix: token.slice(0, 4),
         suffix: token.slice(-4),
         length: token.length,
         active: true
-      })
-      state.activeAccountId = id
-      return id
+      }
+      state.accounts.push(account)
+      state.activeAccountId = account.id
+      return account
     })
     emit('nai:accountChanged', { accountId, reason: 'added' })
-    return { ...verification, accountId }
+    return { ...verification, accountId, label }
   }
   if (channel === 'nai:setActiveAccount') {
     const account = await mutateBrowserState((state) => {
@@ -487,7 +500,7 @@ async function dispatch(channel: string, rawRequest: unknown): Promise<unknown> 
       return state.activeAccountId
     })
     emit('nai:accountChanged', { accountId: activeId, reason: 'deleted' })
-    return { activeId }
+    return { activeId, locked: false, lockReason: null }
   }
   if (channel === 'nai:balance') {
     const account = activeAccount(await readBrowserState())
@@ -874,7 +887,10 @@ async function dispatch(channel: string, rawRequest: unknown): Promise<unknown> 
   if (channel === 'images:showInFolder') return undefined
   if (channel === 'images:saveLocal') {
     const base64 = String(request.base64)
-    const filePath = await saveBrowserImage(base64, 'mosaic')
+    const filePath = await saveBrowserImage(
+      base64,
+      request.kind === 'pixelate' ? 'pixelate' : 'mosaic'
+    )
     return { filePath }
   }
 
@@ -887,6 +903,8 @@ async function dispatch(channel: string, rawRequest: unknown): Promise<unknown> 
   if (channel === 'settings:getSaveDir') return { dir: 'Browser downloads', isDefault: true }
   if (channel === 'settings:pickSaveDir') return { dir: null }
   if (channel === 'settings:resetSaveDir') return { dir: 'Browser downloads' }
+  // 브라우저 모드는 브라우저 자체 확대·축소를 쓴다 — 설정의 화면 배율 항목도 숨긴다
+  if (channel === 'window:getZoom' || channel === 'window:zoom') return { factor: 1 }
   if (
     channel === 'window:control' ||
     channel === 'window:setBackground' ||
@@ -1075,7 +1093,47 @@ async function promptPresetsDispatch(
   })
 }
 
+/**
+ * Like the desktop queue: jobs for deleted scenes must not keep running. Pending ones are
+ * cancelled; a running one keeps its paid image but no longer attaches it to the scene.
+ */
+function detachBrowserQueueScenes(sceneIds: readonly number[]): void {
+  if (sceneIds.length === 0) return
+  const deleted = new Set(sceneIds)
+  let changed = false
+  for (const item of queue.items) {
+    const sceneId = item.request.sceneId
+    if (sceneId === undefined || !deleted.has(sceneId)) continue
+    if (item.state === 'pending') {
+      item.state = 'cancelled'
+      markQueueItemFinished(item.id)
+      changed = true
+    } else if (item.state === 'generating') {
+      item.request = { ...item.request, sceneId: undefined }
+      changed = true
+    }
+  }
+  if (changed) emit('queue:changed', queueSnapshot())
+}
+
+const SCENE_DELETING_CHANNELS = new Set([
+  'scenes:delete',
+  'scenes:bulkDelete',
+  'scenePresets:delete'
+])
+
 async function scenesDispatch(channel: string, request: Record<string, unknown>): Promise<unknown> {
+  if (!SCENE_DELETING_CHANNELS.has(channel)) return mutateScenes(channel, request)
+  const sceneIds = async (): Promise<number[]> =>
+    (await readBrowserState()).scenes.map((scene) => scene.id)
+  const before = await sceneIds()
+  const result = await mutateScenes(channel, request)
+  const after = new Set(await sceneIds())
+  detachBrowserQueueScenes(before.filter((id) => !after.has(id)))
+  return result
+}
+
+async function mutateScenes(channel: string, request: Record<string, unknown>): Promise<unknown> {
   return mutateBrowserState((state) => {
     if (channel === 'scenePresets:list') return { items: state.scenePresets }
     if (channel === 'scenePresets:create') {

@@ -11,8 +11,10 @@ import type {
   CharacterPromptInput,
   GenerationDelayRandomization,
   GenerationRequest,
+  QueueHalt,
   QueueItem,
-  QueueStatus
+  QueueStatus,
+  SceneReservation
 } from '../../shared/types'
 
 /**
@@ -67,7 +69,8 @@ export class GenerationQueue extends EventEmitter {
       const seededRequest =
         i === 0 ? request : { ...request, seed: (request.seed + i) % 4294967296 }
       const req = prepareRequest(applyRandomCharacterPrompt(seededRequest, randomCharacterPrompts))
-      entries.push({ id, state: 'pending', request: req })
+      // Each item owns its request object so detachDeletedScenes can edit one item in place.
+      entries.push({ id, state: 'pending', request: { ...req } })
       ids.push(id)
     }
     // Complete scene preparation before publishing any part of the batch.
@@ -78,11 +81,19 @@ export class GenerationQueue extends EventEmitter {
   }
 
   /** Publish a batch only after its synchronous reservation commit succeeds. */
-  enqueueRequests(requests: GenerationRequest[], commit: () => void): string[] {
-    const entries = requests.map((request): QueueItem => ({
+  enqueueRequests(
+    requests: GenerationRequest[],
+    commit: () => void,
+    reservations?: SceneReservation[]
+  ): string[] {
+    if (reservations && reservations.length !== requests.length) {
+      throw new Error('Reservation count must match request count')
+    }
+    const entries = requests.map((request, index): QueueItem => ({
       id: randomUUID(),
       state: 'pending',
-      request
+      request: { ...request },
+      ...(reservations ? { reservation: reservations[index] } : {})
     }))
     try {
       for (const item of entries) this.items.set(item.id, item)
@@ -99,16 +110,59 @@ export class GenerationQueue extends EventEmitter {
   }
 
   cancel(ids: string[]): void {
+    const cancelled: QueueItem[] = []
     for (const id of ids) {
       const item = this.items.get(id)
       if (item && item.state === 'pending') {
         item.state = 'cancelled'
         this.markFinished(item)
+        cancelled.push(item)
       } else if (item && item.state === 'generating') {
         this.controllers.get(id)?.abort()
       }
     }
+    if (cancelled.length > 0) this.emit('cancelled', cancelled)
     this.emitChanged()
+  }
+
+  /** 대기 중인 항목을 모두 취소로 돌리고 돌려준다 ('cancelled' 이벤트는 호출한 쪽이 낸다) */
+  private cancelPending(): QueueItem[] {
+    const cancelled: QueueItem[] = []
+    for (const item of this.items.values()) {
+      if (item.state !== 'pending') continue
+      item.state = 'cancelled'
+      cancelled.push(item)
+    }
+    for (const item of cancelled) this.markFinished(item)
+    return cancelled
+  }
+
+  /**
+   * Called after scenes are deleted or replaced (single/bulk/preset delete, backup restore).
+   * SQLite may reuse the numeric IDs, so nothing in the queue may keep pointing at them:
+   * - reservations are dropped (there is no scene to give them back to),
+   * - pending items are cancelled through the normal cancel path (no Anlas spent),
+   * - in-flight items lose their sceneId, so the paid image is saved to plain history.
+   *   The generator reads `request.sceneId` from the item-owned request at save time.
+   * Idempotent: calling it again for the same IDs changes nothing.
+   */
+  detachDeletedScenes(sceneIds: readonly number[]): void {
+    if (sceneIds.length === 0) return
+    const deleted = new Set(sceneIds)
+    const pending: string[] = []
+    let detached = false
+    for (const item of this.items.values()) {
+      if (item.reservation && deleted.has(item.reservation.sceneId)) delete item.reservation
+      const sceneId = item.request.sceneId
+      if (sceneId === undefined || !deleted.has(sceneId)) continue
+      if (item.state === 'pending') pending.push(item.id)
+      else if (item.state === 'generating') {
+        delete item.request.sceneId
+        detached = true
+      }
+    }
+    if (pending.length > 0) this.cancel(pending)
+    else if (detached) this.emitChanged()
   }
 
   setDelayMs(ms: number, randomization?: GenerationDelayRandomization): void {
@@ -134,12 +188,20 @@ export class GenerationQueue extends EventEmitter {
         const controller = new AbortController()
         this.controllers.set(next.id, controller)
         this.emitChanged()
+        let halt: string | undefined
         try {
           next.filePath = await this.generateWithRetry(next, controller)
           next.state = 'done'
         } catch (e) {
-          if (controller.signal.aborted || isAbortError(e)) {
+          if (!controller.signal.aborted && isHaltError(e)) {
+            // 보내기 전에 막힌 요청(Anlas 가드) — 취소로 돌려 씬 예약을 되돌리고 남은 예약도 멈춘다
             next.state = 'cancelled'
+            next.error = e.message
+            halt = e.message
+          } else if (controller.signal.aborted || isAbortError(e)) {
+            next.state = 'cancelled'
+            // A late successful response is still done; only a confirmed abort restores it.
+            this.emit('cancelled', [next])
           } else {
             next.state = 'failed'
             next.error = e instanceof Error ? e.message : String(e)
@@ -148,6 +210,11 @@ export class GenerationQueue extends EventEmitter {
           this.controllers.delete(next.id)
           next.retrying = false
           this.markFinished(next)
+        }
+        if (halt !== undefined) {
+          const stopped = this.cancelPending()
+          this.emit('cancelled', [next, ...stopped])
+          this.emit('halted', { reason: halt, stopped: stopped.length } satisfies QueueHalt)
         }
         this.emitChanged()
         if (this.nextPending()) {
@@ -233,6 +300,11 @@ function isAbortError(e: unknown): boolean {
   return (
     e instanceof Error && (e.name === 'AbortError' || e.message.toLowerCase().includes('abort'))
   )
+}
+
+/** 남은 예약까지 멈춰야 하는 오류인지 (AnlasGuardError.haltQueue) */
+function isHaltError(e: unknown): e is Error {
+  return e instanceof Error && (e as { haltQueue?: unknown }).haltQueue === true
 }
 
 /** 전이성(재시도 가능) 오류인지 — NaiHttpError.status가 429/5xx 계열일 때만 */

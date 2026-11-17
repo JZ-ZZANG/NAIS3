@@ -6,6 +6,12 @@ import type {
   PromptParts,
   QueueStatus
 } from '@shared/types'
+import {
+  ANLAS_GUARD_KEYS,
+  anlasGuardSettingEntries,
+  readAnlasGuardSettings,
+  type AnlasGuardSettings
+} from '@shared/anlas-guard'
 import { queueDoneAlert } from '../lib/completion-alert'
 import { t } from '../lib/i18n'
 import { enabledCharacters, randomCharacterCandidates } from './characters-store'
@@ -52,6 +58,9 @@ interface GenerationState {
   seedLocked: boolean
   batchCount: number
   promptSplitEnabled: boolean
+  /** 무료 범위 지킴이 설정 — 실제 차단은 메인이 하고, 여기선 표시·미리 안내용 */
+  anlasGuard: AnlasGuardSettings
+  setAnlasGuard: (patch: Partial<AnlasGuardSettings>) => void
   /** paper | tablet | scroll | opus — Anlas 추정용 */
   subscriptionTier: string | null
   setSubscriptionTier: (tier: string) => void
@@ -78,6 +87,8 @@ interface GenerationState {
   setBatchCount: (count: number) => void
   setPromptSplitEnabled: (enabled: boolean) => void
   patchPromptParts: (patch: Partial<PromptParts>) => void
+  /** main_params까지 불러왔는지 — 그 전의 request는 DEFAULT_REQUEST라 프리셋에 자동 저장하면 안 된다 */
+  hydrated: boolean
   hydrate: () => Promise<void>
   generate: () => Promise<void>
   cancelAll: () => Promise<void>
@@ -109,9 +120,18 @@ interface GenerationState {
 
 export const useGenerationStore = create<GenerationState>((set, get) => ({
   request: DEFAULT_REQUEST,
+  hydrated: false,
   seedLocked: localStorage.getItem('seed_locked') === '1',
   batchCount: Number(localStorage.getItem('batch_count')) || 1,
   promptSplitEnabled: false,
+  anlasGuard: readAnlasGuardSettings(() => null),
+  setAnlasGuard: (patch) => {
+    const anlasGuard = { ...get().anlasGuard, ...patch }
+    set({ anlasGuard })
+    for (const [key, value] of anlasGuardSettingEntries(anlasGuard)) {
+      void window.nais.invoke('settings:set', { key, value })
+    }
+  },
   subscriptionTier: null,
   setSubscriptionTier: (tier) => {
     set({ subscriptionTier: tier })
@@ -191,6 +211,12 @@ export const useGenerationStore = create<GenerationState>((set, get) => ({
       key: 'prompt_split_enabled'
     })
     set({ promptSplitEnabled: split === '1' })
+    const guardKeys = Object.values(ANLAS_GUARD_KEYS)
+    const guardValues = await Promise.all(
+      guardKeys.map((key) => window.nais.invoke('settings:get', { key }))
+    )
+    const guard = new Map(guardKeys.map((key, i) => [key as string, guardValues[i].value]))
+    set({ anlasGuard: readAnlasGuardSettings((key) => guard.get(key)) })
     const { value } = await window.nais.invoke('settings:get', { key: 'main_params' })
     if (value) {
       try {
@@ -199,6 +225,7 @@ export const useGenerationStore = create<GenerationState>((set, get) => ({
         // 손상된 저장값은 기본값으로
       }
     }
+    set({ hydrated: true })
     const queue = await window.nais.invoke('queue:status', undefined)
     set({ queue })
     await get().refreshHistory()
@@ -246,12 +273,18 @@ export const useGenerationStore = create<GenerationState>((set, get) => ({
       key: 'main_params',
       value: JSON.stringify(baseRequest)
     })
+    const viewing = get().viewingFilePath
     set({ previewPng: null, progress: null, viewingFilePath: null })
-    await window.nais.invoke('queue:enqueue', {
+    const res = await window.nais.invoke('queue:enqueue', {
       request: finalRequest,
       count: batchCount,
       ...(randomCharacterPrompts.length > 0 ? { randomCharacterPrompts } : {})
     })
+    // 무료 범위 지킴이가 예약 전에 막았으면 이유를 알리고 보던 이미지를 되돌린다
+    if (res?.blocked) {
+      toast(res.blocked, 'error')
+      if (get().viewingFilePath === null) set({ viewingFilePath: viewing })
+    }
   },
 
   cancelAll: async () => {
@@ -340,15 +373,24 @@ export function randomSeed(): number {
 
 /** 파라미터를 settings('main_params')에 디바운스 저장 (편집 중 매 키 입력마다 쓰지 않도록) */
 let persistTimer: ReturnType<typeof setTimeout> | undefined
+let pendingParams: GenerationRequest | null = null
 function persistParams(request: GenerationRequest): void {
+  pendingParams = request
   clearTimeout(persistTimer)
-  persistTimer = setTimeout(() => {
-    void window.nais.invoke('settings:set', {
-      key: 'main_params',
-      value: JSON.stringify(withoutTransientSource(request))
-    })
-  }, 400)
+  persistTimer = setTimeout(flushParams, 400)
 }
+function flushParams(): void {
+  clearTimeout(persistTimer)
+  if (!pendingParams) return
+  void window.nais.invoke('settings:set', {
+    key: 'main_params',
+    value: JSON.stringify(withoutTransientSource(pendingParams))
+  })
+  pendingParams = null
+}
+// 프리셋 전환 직후 종료·새로고침하면 활성 프리셋(localStorage, 즉시 저장)과 main_params가 어긋나
+// 다음 시작 때 직전 프리셋 값이 새 활성 프리셋에 자동 저장된다
+if (typeof window !== 'undefined') window.addEventListener('beforeunload', flushParams)
 
 /** 메인 프로세스 이벤트 구독 — 앱 시작 시 1회 */
 export function bindGenerationEvents(): () => void {
@@ -357,6 +399,8 @@ export function bindGenerationEvents(): () => void {
   // For the completion alert — items that became done/failed during the current batch
   let batchDone = 0
   let batchFailed = 0
+  // 이번 배치가 Anlas 가드로 멈췄으면 그 이유 (완료 알림에 붙인다)
+  let haltReason: string | undefined
 
   // 실패 토스트 합치기 — 배치가 통째로 막히면(예: rate-limit) 장마다 토스트가 쏟아지므로
   // 짧은 창으로 모아 한 번만 알린다. 동일 사유면 개수만, 사유가 여러 개면 종류 수를 표기.
@@ -449,14 +493,23 @@ export function bindGenerationEvents(): () => void {
     if (!prevActive && stillActive) {
       batchDone = 0
       batchFailed = 0
+      haltReason = undefined
       retryNoticeShown = false // 새 배치 — 재시도 안내 다시 허용
     } else {
       batchDone += doneNow
       batchFailed += failedNow
-      if (prevActive && !stillActive && batchDone + batchFailed > 0) {
-        void queueDoneAlert(batchDone, batchFailed)
+      if (prevActive && !stillActive && (batchDone + batchFailed > 0 || haltReason)) {
+        // 멈춘 이유는 가드가 큐를 세웠을 때만 넘긴다
+        if (haltReason) void queueDoneAlert(batchDone, batchFailed, haltReason)
+        else void queueDoneAlert(batchDone, batchFailed)
+        haltReason = undefined
       }
     }
+  })
+  // 무료 범위 지킴이가 생성 직전에 막아 큐를 멈춤 — 이유와 함께 멈춘 예약 수를 알린다
+  const offHalted = window.nais.on('queue:halted', ({ reason, stopped }) => {
+    haltReason = reason
+    toast(stopped > 0 ? `${reason} ${t('ui.anlasGuardQueueStopped', stopped)}` : reason, 'error')
   })
   const offProgress = window.nais.on('generation:progress', (e) => {
     useGenerationStore.setState({
@@ -491,6 +544,7 @@ export function bindGenerationEvents(): () => void {
   })
   return () => {
     offQueue()
+    offHalted()
     offProgress()
     offAnlas()
     offAccount()
