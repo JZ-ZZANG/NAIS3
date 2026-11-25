@@ -20,6 +20,8 @@ vi.mock('../src/main/sharp', () => ({
 }))
 
 import { migrations } from '../src/main/db/migrations'
+import { ensureSceneAdditionSchema } from '../src/main/db/scene-addition-schema'
+import { ensureScenePlusSchema } from '../src/main/db/scene-plus-schema'
 import { captureBackupDatabase, restoreBackupDatabase } from '../src/main/backup/repo'
 import { prepareVibes } from '../src/main/refs/prepare'
 import {
@@ -55,6 +57,8 @@ beforeEach(() => {
   mocks.db = new Database(':memory:')
   mocks.db.pragma('foreign_keys = ON')
   for (const migration of migrations) migration(mocks.db)
+  ensureSceneAdditionSchema(mocks.db)
+  ensureScenePlusSchema(mocks.db)
 })
 
 afterEach(() => {

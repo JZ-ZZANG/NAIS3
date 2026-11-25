@@ -57,7 +57,8 @@ beforeEach(() => {
     INSERT INTO scene_character_additions (scene_id) VALUES (11);
     INSERT INTO scene_character_addition_prompts (scene_id, character_prompt_id) VALUES (11, 1);
     INSERT INTO scene_plus_scenes (id, preset_id, name, use_coords) VALUES (21, 1, 'Plus scene', 1);
-    INSERT INTO images (id, file_path, kind, seed) VALUES (51, '/existing.png', 'scene', 42);
+    INSERT INTO images (id, file_path, kind, seed, payload_json)
+      VALUES (51, '/existing.png', 'scene', 42, '{}');
     INSERT INTO scene_plus_images (image_id, scene_id) VALUES (51, 21);
     INSERT INTO scene_plus_slots (scene_id, slot_index, prompt, center_x, center_y)
       VALUES (21, 1, 'slot prompt', 0.176, 0.21);
