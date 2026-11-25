@@ -17,10 +17,11 @@ vi.mock('../src/main/images/storage', () => ({ libraryRoot: () => mocks.root }))
 import { migrations } from '../src/main/db/migrations'
 import { ensureSceneAdditionSchema } from '../src/main/db/scene-addition-schema'
 import { ensureScenePlusSchema } from '../src/main/db/scene-plus-schema'
-import { createNaisArchive, readNaisArchive } from '../src/main/backup/archive'
+import { readNaisArchive } from '../src/main/backup/archive'
 import {
   captureBackupDatabase,
   exportLegacyJson,
+  exportNais,
   importLegacyJson,
   restoreBackupDatabase
 } from '../src/main/backup/repo'
@@ -56,6 +57,8 @@ beforeEach(() => {
     INSERT INTO scene_character_additions (scene_id) VALUES (11);
     INSERT INTO scene_character_addition_prompts (scene_id, character_prompt_id) VALUES (11, 1);
     INSERT INTO scene_plus_scenes (id, preset_id, name, use_coords) VALUES (21, 1, 'Plus scene', 1);
+    INSERT INTO images (id, file_path, kind, seed) VALUES (51, '/existing.png', 'scene', 42);
+    INSERT INTO scene_plus_images (image_id, scene_id) VALUES (51, 21);
     INSERT INTO scene_plus_slots (scene_id, slot_index, prompt, center_x, center_y)
       VALUES (21, 1, 'slot prompt', 0.176, 0.21);
     INSERT INTO scene_plus_casts (id, name, character_prompt_id) VALUES (31, 'Plus cast', 1);
@@ -66,6 +69,7 @@ beforeEach(() => {
     INSERT INTO scene_plus_cast_slots (slot_index, group_id) VALUES (2, 41);
     INSERT INTO settings (key, value) VALUES ('scene_additions_enabled', '1');
     INSERT INTO settings (key, value) VALUES ('scene_casts', '[{"id":"cast","name":"Saved"}]');
+    INSERT INTO settings (key, value) VALUES ('scene_cast_groups_personal_v1', '[{"id":"group","name":"Saved group"}]');
     INSERT INTO settings (key, value) VALUES ('nai_token', 'SECRET');
   `)
   db.prepare('INSERT INTO vibe_images (id, name, file_path) VALUES (1, ?, ?)').run('Vibe', vibePath)
@@ -93,14 +97,20 @@ describe('custom scene data during upstream backup integration', () => {
     const expected = customRows()
     const { database, skippedFiles } = captureBackupDatabase()
     expect(skippedFiles).toBe(0)
+    const destination = join(mocks.root, 'backup.nais')
+    if (format === 'nais') {
+      expect(await exportNais(destination, '1.0.33-c.1')).toEqual({ skippedFiles: 0 })
+    }
     const backup =
-      format === 'nais'
-        ? await readNaisArchive(await createNaisArchive(database, '1.0.27'))
-        : exportLegacyJson()
+      format === 'nais' ? await readNaisArchive(readFileSync(destination)) : exportLegacyJson()
     expect(JSON.stringify(backup)).not.toContain('SECRET')
     db.exec("UPDATE settings SET value = '0' WHERE key = 'scene_additions_enabled'")
-    for (const table of [...CUSTOM_BACKUP_TABLES].reverse())
-      db.prepare(`DELETE FROM ${table}`).run()
+    db.exec(
+      "UPDATE settings SET value = '[]' WHERE key IN ('scene_casts', 'scene_cast_groups_personal_v1')"
+    )
+    db.exec("UPDATE scene_plus_scenes SET name = 'Renamed after backup' WHERE id = 21")
+    db.exec("UPDATE scene_plus_slots SET prompt = 'Changed after backup' WHERE scene_id = 21")
+    db.exec('DELETE FROM scene_character_additions')
     const result =
       format === 'nais'
         ? restoreBackupDatabase(backup as typeof database)
@@ -108,9 +118,21 @@ describe('custom scene data during upstream backup integration', () => {
     expect(result.imported).toBeGreaterThan(0)
     expect(customRows()).toEqual(expected)
     expect(db.pragma('foreign_key_check')).toEqual([])
+    expect(db.prepare('SELECT image_id, scene_id FROM scene_plus_images').all()).toEqual([
+      { image_id: 51, scene_id: 21 }
+    ])
     expect(
       db.prepare("SELECT value FROM settings WHERE key = 'scene_additions_enabled'").pluck().get()
     ).toBe('1')
+    expect(db.prepare("SELECT value FROM settings WHERE key = 'scene_casts'").pluck().get()).toBe(
+      '[{"id":"cast","name":"Saved"}]'
+    )
+    expect(
+      db
+        .prepare("SELECT value FROM settings WHERE key = 'scene_cast_groups_personal_v1'")
+        .pluck()
+        .get()
+    ).toBe('[{"id":"group","name":"Saved group"}]')
     expect(db.prepare("SELECT value FROM settings WHERE key = 'nai_token'").pluck().get()).toBe(
       'SECRET'
     )
@@ -129,6 +151,17 @@ describe('custom scene data during upstream backup integration', () => {
       'scene_plus_slots row is missing a numeric slot_index'
     )
     expect(customRows()).toEqual(before)
+  })
+
+  it('does not attach existing images to a different scene+ that reuses the same id', () => {
+    const { database } = captureBackupDatabase()
+    database.tables.scene_plus_scenes![0].created_at = '2001-01-01 00:00:00'
+
+    restoreBackupDatabase(database)
+
+    expect(db.prepare('SELECT * FROM scene_plus_images').all()).toEqual([])
+    expect(db.prepare('SELECT id FROM images').all()).toEqual([{ id: 51 }])
+    expect(db.pragma('foreign_key_check')).toEqual([])
   })
 
   it('reports a missing reference source instead of producing an unrestorable custom backup', () => {

@@ -1,10 +1,36 @@
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
 import JSZip from 'jszip'
-import { describe, expect, it } from 'vitest'
-import { createNaisArchive, hasZipSignature, readNaisArchive } from '../src/main/backup/archive'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { hasZipSignature, readNaisArchive, writeNaisArchive } from '../src/main/backup/archive'
 import { legacyNais3ToBackupDatabase } from '../src/main/backup/legacy'
-import type { BackupDatabaseV1 } from '../src/main/backup/types'
+import type { BackupArchiveSource } from '../src/main/backup/types'
 
-function fixture(): BackupDatabaseV1 {
+let directory: string
+let vibePath: string
+
+beforeEach(() => {
+  directory = mkdtempSync(join(tmpdir(), 'nais3-backup-archive-'))
+  vibePath = join(directory, 'vibe.webp')
+  writeFileSync(vibePath, 'webp-data')
+})
+
+afterEach(() => {
+  rmSync(directory, { recursive: true, force: true })
+})
+
+async function createNaisArchive(
+  source: BackupArchiveSource,
+  appVersion: string,
+  createdAt?: string
+): Promise<Buffer> {
+  const destination = join(directory, 'backup.nais')
+  await writeNaisArchive(destination, source, appVersion, createdAt)
+  return readFileSync(destination)
+}
+
+function fixture(): BackupArchiveSource {
   return {
     version: 1,
     includedTables: ['character_folders', 'character_prompts', 'vibe_images'],
@@ -52,7 +78,7 @@ function fixture(): BackupDatabaseV1 {
         rowId: 3,
         column: 'file_path',
         extension: '.webp',
-        data: Buffer.from('webp-data')
+        sourcePath: vibePath
       }
     ]
   }
@@ -79,6 +105,85 @@ describe('.nais backup archive', () => {
         data: Buffer.from('webp-data')
       })
     ])
+  })
+
+  it('leaves out a row whose file disappeared before it was written', async () => {
+    rmSync(vibePath)
+    const destination = join(directory, 'backup.nais')
+
+    const { skippedFiles } = await writeNaisArchive(destination, fixture(), '1.0.23')
+
+    expect(skippedFiles).toBe(1)
+    const restored = await readNaisArchive(readFileSync(destination))
+    expect(restored.tables.vibe_images).toEqual([])
+    expect(restored.tables.character_prompts).toHaveLength(1)
+    expect(restored.files).toEqual([])
+  })
+
+  it('round-trips custom composite keys, blobs, and portable settings through streaming export', async () => {
+    const source = fixture()
+    source.includedTables.push('scene_plus_slots', 'scene_plus_cast_slots')
+    source.tables.scene_plus_slots = [
+      { scene_id: 21, slot_index: 1, prompt: 'first', thumbnail: Buffer.from('first') },
+      { scene_id: 21, slot_index: 2, prompt: 'second', thumbnail: Buffer.from('second') }
+    ]
+    source.tables.scene_plus_cast_slots = [{ slot_index: 1, cast_id: 31, group_id: null }]
+    source.workspaceSettings = {
+      scene_casts: '[{"id":"cast"}]',
+      scene_cast_groups_personal_v1: '[{"id":"group"}]',
+      scene_additions_enabled: '1'
+    }
+    const expectedSettings = { ...source.workspaceSettings }
+    Object.assign(source.workspaceSettings, { nai_token: 'SECRET' })
+
+    const restored = await readNaisArchive(await createNaisArchive(source, '1.0.33-c.1'))
+
+    expect(restored.tables.scene_plus_slots).toEqual(source.tables.scene_plus_slots)
+    expect(restored.tables.scene_plus_cast_slots).toEqual(source.tables.scene_plus_cast_slots)
+    expect(restored.workspaceSettings).toEqual(expectedSettings)
+    expect(JSON.stringify(restored)).not.toContain('SECRET')
+  })
+
+  it.each([
+    ['scene_character_addition_charrefs', 'scene_id', 'charref_id', 'charref_images'],
+    ['scene_character_addition_vibes', 'scene_id', 'vibe_id', 'vibe_images'],
+    ['scene_plus_cast_charrefs', 'cast_id', 'charref_id', 'charref_images'],
+    ['scene_plus_cast_vibes', 'cast_id', 'vibe_id', 'vibe_images']
+  ] as const)(
+    'rejects a missing streamed asset referenced by %s',
+    async (table, key, column, target) => {
+      const source = fixture()
+      source.includedTables = [table, target]
+      source.tables = {
+        [table]: [{ [key]: 21, [column]: 3 }],
+        [target]: [{ id: 3, file_path: '', thumbnail: Buffer.from('thumbnail') }]
+      }
+      source.files[0].table = target
+      const destination = join(directory, 'backup.nais')
+      writeFileSync(destination, 'previous backup')
+      rmSync(vibePath)
+
+      await expect(writeNaisArchive(destination, source, '1.0.33-c.1')).rejects.toThrow(
+        'has no source image'
+      )
+
+      expect(readFileSync(destination, 'utf-8')).toBe('previous backup')
+      expect(readdirSync(directory)).toEqual(['backup.nais'])
+    }
+  )
+
+  it('keeps an existing file and leaves no partial archive when writing fails', async () => {
+    const destination = join(directory, 'backup.nais')
+    writeFileSync(destination, 'previous backup')
+    const source = fixture()
+    source.tables.vibe_images = [{ ...source.tables.vibe_images![0], id: 'not a number' }]
+
+    await expect(writeNaisArchive(destination, source, '1.0.23')).rejects.toThrow(
+      'missing a numeric id'
+    )
+
+    expect(readFileSync(destination, 'utf-8')).toBe('previous backup')
+    expect(readdirSync(directory).sort()).toEqual(['backup.nais', 'vibe.webp'])
   })
 
   it('rejects an asset modified without updating its checksum', async () => {

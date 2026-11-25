@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { extname, join } from 'path'
-import { createNaisArchive, readNaisArchive } from './archive'
+import { readNaisArchive, writeNaisArchive } from './archive'
 import { legacyNais3ToBackupDatabase, LEGACY_BACKUP_TABLES } from './legacy'
 import {
   BACKUP_FORMAT_VERSION,
@@ -11,10 +11,13 @@ import {
   BACKUP_SETTING_KEYS,
   parseBackupSettings,
   type BackupSettings,
+  type BackupArchiveSource,
   type BackupDatabaseV1,
   type BackupFile,
   type BackupRow,
-  type BackupTableName
+  type BackupSourceFile,
+  type BackupTableName,
+  type ImportOptions
 } from './types'
 import { getDb } from '../db'
 import { getSetting, setSetting } from '../db/settings'
@@ -75,15 +78,14 @@ export function exportLegacyJson(): Record<string, unknown> {
   }
 }
 
-/** Capture all portable workspace data. Rows whose required source file is missing are skipped. */
-export function captureBackupDatabase(): {
-  database: BackupDatabaseV1
-  skippedFiles: number
-} {
+/**
+ * Capture all portable workspace rows in one synchronous pass, so the snapshot is consistent.
+ * File-backed rows keep only their source path; the files are streamed later by the writer.
+ */
+export function captureBackupSource(): BackupArchiveSource {
   const db = getDb()
-  const tables: BackupDatabaseV1['tables'] = {}
-  const files: BackupFile[] = []
-  let skippedFiles = 0
+  const tables: BackupArchiveSource['tables'] = {}
+  const files: BackupSourceFile[] = []
 
   for (const table of BACKUP_TABLES) {
     const sourceRows = db.prepare(`SELECT * FROM ${table}`).all() as DbRow[]
@@ -94,19 +96,14 @@ export function captureBackupDatabase(): {
         if (typeof row.id !== 'number' || typeof row.file_path !== 'string') {
           throw new Error(`${table} contains an invalid file row`)
         }
-        try {
-          files.push({
-            table,
-            rowId: row.id,
-            column: 'file_path',
-            extension: normalizedExtension(row.file_path),
-            data: readFileSync(row.file_path)
-          })
-          row.file_path = ''
-        } catch {
-          skippedFiles++
-          continue
-        }
+        files.push({
+          table,
+          rowId: row.id,
+          column: 'file_path',
+          extension: normalizedExtension(row.file_path),
+          sourcePath: row.file_path
+        })
+        row.file_path = ''
       }
       rows.push(row)
     }
@@ -116,24 +113,60 @@ export function captureBackupDatabase(): {
   assertSceneAssetReferences(tables)
 
   return {
-    database: {
-      version: BACKUP_FORMAT_VERSION,
-      includedTables: [...BACKUP_TABLES],
-      tables,
-      mainParams: getSetting('main_params') || null,
-      workspaceSettings: captureWorkspaceSettings(),
-      files
-    },
-    skippedFiles
+    version: BACKUP_FORMAT_VERSION,
+    includedTables: [...BACKUP_TABLES],
+    tables,
+    mainParams: getSetting('main_params') || null,
+    workspaceSettings: captureWorkspaceSettings(),
+    files
   }
 }
 
-export async function exportNais(appVersion: string): Promise<{
-  archive: Buffer
+/**
+ * In-memory snapshot with every file read, for restoring without an archive round trip.
+ * Rows whose source file is missing are skipped.
+ */
+export function captureBackupDatabase(): {
+  database: BackupDatabaseV1
   skippedFiles: number
-}> {
-  const { database, skippedFiles } = captureBackupDatabase()
-  return { archive: await createNaisArchive(database, appVersion), skippedFiles }
+} {
+  const source = captureBackupSource()
+  const sources = new Map(source.files.map((file) => [`${file.table}:${file.rowId}`, file]))
+  const files: BackupFile[] = []
+  const tables: BackupDatabaseV1['tables'] = {}
+  let skippedFiles = 0
+
+  for (const table of source.includedTables) {
+    tables[table] = (source.tables[table] ?? []).filter((row) => {
+      const file = sources.get(`${table}:${row.id}`)
+      if (!file) return true
+      try {
+        files.push({
+          table,
+          rowId: file.rowId,
+          column: 'file_path',
+          extension: file.extension,
+          data: readFileSync(file.sourcePath)
+        })
+        return true
+      } catch {
+        skippedFiles++
+        return false
+      }
+    })
+  }
+
+  assertSceneAssetReferences(tables)
+
+  return { database: { ...source, tables, files }, skippedFiles }
+}
+
+/** Write a .nais archive of the workspace to `destination` (replaced only once it is complete). */
+export async function exportNais(
+  destination: string,
+  appVersion: string
+): Promise<{ skippedFiles: number }> {
+  return writeNaisArchive(destination, captureBackupSource(), appVersion)
 }
 
 function tableColumns(table: BackupTableName): Set<string> {
@@ -178,10 +211,9 @@ function validateRows(database: BackupDatabaseV1): Partial<Record<BackupTableNam
 /**
  * Generation history (`images`) is not part of a backup, but `images.scene_id` references
  * `gen_scenes(id) ON DELETE SET NULL`. Replacing `gen_scenes` during restore would therefore
- * unlink every image from its scene. A `PRAGMA foreign_key_list` audit of every table after
- * all migrations shows this is the only foreign key from a table outside BACKUP_TABLES into
- * one inside it (the folder links point between backup tables, and gen_scenes.preset_id has
- * no declared FK), so nothing else is nulled or cascaded.
+ * unlink every image from its scene. Scene+ keeps its links in `scene_plus_images`, outside
+ * BACKUP_TABLES, and deleting `scene_plus_scenes` cascades to those links as well. Both kinds
+ * of links are captured before replacement and restored for matching scenes afterward.
  *
  * A link is put back only when the restored data holds what is recognisably the same scene:
  * the same id and the same creation time. A numeric id alone is not trusted, because a backup
@@ -193,19 +225,29 @@ function validateRows(database: BackupDatabaseV1): Partial<Record<BackupTableNam
  * Scene covers and image counts are derived from `images.scene_id` by the scene queries,
  * so restoring the links keeps them consistent as well.
  */
-const SCENE_IDENTITY_SQL = 'SELECT id, created_at FROM gen_scenes'
+type SceneTable = 'gen_scenes' | 'scene_plus_scenes'
 
-function captureSceneLinks(db: ReturnType<typeof getDb>): {
+function captureSceneLinks(
+  db: ReturnType<typeof getDb>,
+  table: SceneTable
+): {
+  table: SceneTable
   /** created_at of every scene before the restore, by id */
   scenes: Map<number, string>
   images: { id: number; scene_id: number }[]
 } {
-  const images = db.prepare('SELECT id, scene_id FROM images WHERE scene_id IS NOT NULL').all() as {
+  const images = db
+    .prepare(
+      table === 'gen_scenes'
+        ? 'SELECT id, scene_id FROM images WHERE scene_id IS NOT NULL'
+        : 'SELECT image_id AS id, scene_id FROM scene_plus_images'
+    )
+    .all() as { id: number; scene_id: number }[]
+  const rows = db.prepare(`SELECT id, created_at FROM ${table}`).all() as {
     id: number
-    scene_id: number
+    created_at: string
   }[]
-  const rows = db.prepare(SCENE_IDENTITY_SQL).all() as { id: number; created_at: string }[]
-  return { scenes: new Map(rows.map((row) => [row.id, row.created_at])), images }
+  return { table, scenes: new Map(rows.map((row) => [row.id, row.created_at])), images }
 }
 
 /** Relink images to scenes that survived the restore; returns the ids of those scenes. */
@@ -213,12 +255,18 @@ function restoreSceneLinks(
   db: ReturnType<typeof getDb>,
   captured: ReturnType<typeof captureSceneLinks>
 ): Set<number> {
-  const restoredCreatedAt = db.prepare('SELECT created_at FROM gen_scenes WHERE id = ?').pluck()
+  const restoredCreatedAt = db
+    .prepare(`SELECT created_at FROM ${captured.table} WHERE id = ?`)
+    .pluck()
   const same = new Set<number>()
   for (const [id, createdAt] of captured.scenes) {
     if (restoredCreatedAt.get(id) === createdAt) same.add(id)
   }
-  const relink = db.prepare('UPDATE images SET scene_id = ? WHERE id = ?')
+  const relink = db.prepare(
+    captured.table === 'gen_scenes'
+      ? 'UPDATE images SET scene_id = ? WHERE id = ?'
+      : 'INSERT INTO scene_plus_images (scene_id, image_id) VALUES (?, ?)'
+  )
   for (const image of captured.images) {
     if (same.has(image.scene_id)) relink.run(image.scene_id, image.id)
   }
@@ -226,7 +274,10 @@ function restoreSceneLinks(
 }
 
 /** Restore a validated snapshot, replacing only the tables declared by that format. */
-export function restoreBackupDatabase(database: BackupDatabaseV1): { imported: number } {
+export function restoreBackupDatabase(
+  database: BackupDatabaseV1,
+  options: ImportOptions = {}
+): { imported: number } {
   const tables = validateRows(database)
   const workspaceSettings = parseBackupSettings(database.workspaceSettings)
   const fileMap = new Map(
@@ -252,12 +303,18 @@ export function restoreBackupDatabase(database: BackupDatabaseV1): { imported: n
       }
     }
 
+    // After the files, so a backup with a missing file is rejected without a snapshot; a
+    // failing hook still removes the files written above.
+    options.beforeReplace?.()
     let imported = 0
     const db = getDb()
     const included = new Set(database.includedTables)
     let replacedSceneIds: number[] = []
     const transaction = db.transaction(() => {
-      const sceneLinks = included.has('gen_scenes') ? captureSceneLinks(db) : null
+      const sceneLinks = included.has('gen_scenes') ? captureSceneLinks(db, 'gen_scenes') : null
+      const plusSceneLinks = included.has('scene_plus_scenes')
+        ? captureSceneLinks(db, 'scene_plus_scenes')
+        : null
       for (const table of [...BACKUP_TABLES].reverse()) {
         if (included.has(table)) db.prepare(`DELETE FROM ${table}`).run()
       }
@@ -279,6 +336,7 @@ export function restoreBackupDatabase(database: BackupDatabaseV1): { imported: n
         const kept = restoreSceneLinks(db, sceneLinks)
         replacedSceneIds = [...sceneLinks.scenes.keys()].filter((id) => !kept.has(id))
       }
+      if (plusSceneLinks) restoreSceneLinks(db, plusSceneLinks)
       if (typeof database.mainParams === 'string') {
         setSetting('main_params', database.mainParams)
       }
@@ -298,16 +356,22 @@ export function restoreBackupDatabase(database: BackupDatabaseV1): { imported: n
   }
 }
 
-export async function importNais(input: Buffer): Promise<{ imported: number }> {
-  return restoreBackupDatabase(await readNaisArchive(input))
+export async function importNais(
+  input: Buffer,
+  options: ImportOptions = {}
+): Promise<{ imported: number }> {
+  return restoreBackupDatabase(await readNaisArchive(input), options)
 }
 
-export function importLegacyJson(data: Record<string, unknown>): {
+export function importLegacyJson(
+  data: Record<string, unknown>,
+  options: ImportOptions = {}
+): {
   imported: number
   skippedFiles: number
 } {
   const { database, skippedFiles } = legacyNais3ToBackupDatabase(data)
-  return { ...restoreBackupDatabase(database), skippedFiles }
+  return { ...restoreBackupDatabase(database, options), skippedFiles }
 }
 
 // Compatibility exports for existing main-process call sites.

@@ -38,10 +38,23 @@ export interface VibeItem {
   encodedReady: boolean
   /** 현재 infoExtracted 값으로 캐시된 모델 목록 */
   encodedModels?: string[]
+  /** 이미지 메타데이터에서 복원 — 원본 이미지가 없어 재인코딩 불가 (캐시된 모델·IE로만 사용) */
+  encodedOnly?: boolean
   folderId: number | null
 }
 
-export type CharRefType = 'character' | 'style' | 'character&style' | 'costume' | 'delta'
+/**
+ * Precise Reference types as sent in `base_caption`. `costume` is Outfit; the
+ * `_mainoutfit` / `_anyoutfit` variants are the V5 "Prefer same outfit" toggle states.
+ */
+export type CharRefType =
+  | 'character'
+  | 'character_mainoutfit'
+  | 'style'
+  | 'character&style'
+  | 'character&style_anyoutfit'
+  | 'costume'
+  | 'delta'
 
 export interface CharRefItem {
   id: number
@@ -52,6 +65,15 @@ export interface CharRefItem {
   strength: number
   fidelity: number
   folderId: number | null
+}
+
+/** 경로/드롭 이미지로 레퍼런스 추가 요청 (vibes:addFrom · crefs:addFrom 공용) */
+export interface RefAddFromRequest {
+  folderId: number | null
+  /** 앱이 보여 주는 이미지 경로 — 메인에서 저장 폴더/라이브러리/메모리 이미지인지 검증 */
+  filePaths?: string[]
+  /** 외부에서 드롭한 파일 (data URL 또는 base64) */
+  images?: { name: string; base64: string }[]
 }
 
 export interface GenerationRequest {
@@ -274,6 +296,23 @@ export const EMOTIONS = [
   'playful'
 ] as const
 
+/** 무료 배경 제거(HF Space) — primary: BRIA RMBG 2.0, fallback: anime-remove-background */
+export type FreeBgRemovalSpace = 'primary' | 'fallback'
+
+/** 무료 배경 제거 진행 상태 — position은 Space 대기열 순번(알 때만) */
+export interface FreeBgRemovalProgress {
+  space: FreeBgRemovalSpace
+  stage: 'connecting' | 'queued' | 'processing'
+  position?: number
+}
+
+/** 무료 배경 제거 시도 하나의 실패 사유 — 모든 Space가 실패하면 시도마다 하나씩 */
+export interface FreeBgRemovalAttempt {
+  spaceId: string
+  reason: 'timeout' | 'error'
+  message: string
+}
+
 /** 작가 태그 분석 결과 한 줄 — label은 `artist:이름`, score는 0~1 유사도 */
 export interface ArtistTag {
   label: string
@@ -295,6 +334,12 @@ export interface ImageMetadata {
   height?: number
   /** Source 청크 (모델명 등, 표시용) */
   model?: string
+  /** 저장된 요청의 NAI API 모델 id (DB payload가 있을 때만) — 재생성용 */
+  modelId?: string
+  /** 저장된 요청의 action (DB payload가 있을 때만) — i2i·인페인트 결과는 txt2img로 재생성할 수 없다 */
+  generationAction?: 'generate' | 'img2img' | 'infill'
+  /** V5 투명 배경 요청 여부 (요청의 straight_alpha) — 없으면 프롬프트 태그로 추정 */
+  transparentBackground?: boolean
   software?: string
   variety?: boolean
   useCoords?: boolean
@@ -302,6 +347,19 @@ export interface ImageMetadata {
   qualityToggle?: boolean
   ucPreset?: number
   characterPrompts?: { prompt: string; negativePrompt: string; center?: { x: number; y: number } }[]
+  /** 생성에 쓰인 바이브 트랜스퍼 (인코딩만 있고 원본 이미지는 없다) */
+  vibes?: MetadataVibe[]
+  /** vibes가 인코딩된 모델의 API id. 모르면 undefined */
+  vibeModel?: string
+}
+
+/** 이미지 메타데이터에서 읽은 바이브 한 장 */
+export interface MetadataVibe {
+  /** 인코딩된 바이브 (base64). 메타데이터에 인코딩이 없으면 undefined — 복원 불가 */
+  encoded?: string
+  strength: number
+  /** 메타데이터에 information extracted가 있을 때만 */
+  informationExtracted?: number
 }
 
 /** 씬 프리셋 (씬들의 그룹) */
@@ -483,6 +541,39 @@ export interface LibraryStack {
   coverUrl: string
 }
 
+/**
+ * 앱이 데이터 폴더 안에 스스로 남긴 DB 백업의 출처.
+ * upgrade-original = 업데이트 직전 원본 복사본(upgrade-backups/), upgrade = 업데이트 직전 스냅샷,
+ * import = 백업 가져오기 직전, restore = 백업으로 되돌리기 직전, auto = 주기 스냅샷
+ */
+export type RecoverableBackupKind = 'upgrade-original' | 'upgrade' | 'import' | 'restore' | 'auto'
+
+/** 사용자가 만든 데이터 수. 새 DB가 미리 넣는 폴더·씬 프리셋·손대지 않은 기본 조각은 세지 않는다 */
+export interface WorkspaceCounts {
+  characters: number
+  fragments: number
+  promptPresets: number
+  scenes: number
+  /** 생성 기록 (images) */
+  history: number
+  library: number
+  vibes: number
+  characterReferences: number
+}
+
+export interface RecoverableBackup {
+  /** 데이터 폴더 기준 상대 경로 — 메인은 복원할 때 이 값으로 목록을 다시 찾는다 */
+  id: string
+  kind: RecoverableBackupKind
+  /** 백업 파일을 쓴 시각 (ms) */
+  createdAt: number
+  /** 백업의 DB 스키마 버전 — 지금보다 낮으면 복원 후 다음 시작에서 업그레이드한다 */
+  schemaVersion: number
+  counts: WorkspaceCounts
+  /** 지금 작업 공간보다 데이터가 많은지 */
+  hasMoreThanCurrent: boolean
+}
+
 /** IPC invoke 채널 계약: 채널명 → (요청, 응답) */
 export interface IpcInvokeMap {
   'db:status': { req: void; res: { version: number; path: string } }
@@ -637,7 +728,7 @@ export interface IpcInvokeMap {
   'frags:folderDelete': { req: { id: number }; res: void }
   'tags:search': {
     req: { query: string; limit?: number }
-    res: { items: { tag: string; count: number; type: string }[] }
+    res: { items: { tag: string; count: number; type: string; rank: number }[] }
   }
   /** 모델별 토큰 카운트 (V5=Qwen 3.5, 이전 모델=T5) */
   'tokens:count': { req: { texts: string[]; model: string }; res: { counts: number[] } }
@@ -683,6 +774,14 @@ export interface IpcInvokeMap {
   }
   /** V5 Curated 업스케일 (2x) — 결과를 히스토리에 저장하고 파일 경로 + 결과 base64 반환 */
   'images:upscale': {
+    req: { imageBase64: string }
+    res: { filePath: string; base64: string } | { error: string }
+  }
+  /**
+   * 무료 배경 제거 — 이미지를 공개 Hugging Face Space로 보내 처리 (Anlas 없음, 인터넷 필요).
+   * 결과를 히스토리에 저장하고 파일 경로 + 결과 base64 반환. 진행은 images:removeBackgroundFreeProgress
+   */
+  'images:removeBackgroundFree': {
     req: { imageBase64: string }
     res: { filePath: string; base64: string } | { error: string }
   }
@@ -732,6 +831,8 @@ export interface IpcInvokeMap {
     res: void
   }
   'promptPresets:delete': { req: { id: number }; res: void }
+  /** 프리셋 복제 — 내용 전체 복사, 이름에 복제 표시, 목록 끝에 추가. 원본이 없으면 id 0 */
+  'promptPresets:duplicate': { req: { id: number }; res: { id: number } }
   /** 업데이트 다운로드 시작 (완료 시 자동 설치/재시작) */
   'update:start': { req: void; res: void }
   /** 전체 데이터 .nais 내보내기 (저장 다이얼로그) */
@@ -749,6 +850,17 @@ export interface IpcInvokeMap {
     req: void
     res: { summary: string; needsPromptReload: boolean } | { error: string } | { canceled: true }
   }
+  /** 데이터가 남은 앱 내부 백업 (최신순) + 지금 작업 공간의 데이터 수 */
+  'backup:listRecoverable': {
+    req: void
+    res: { items: RecoverableBackup[]; current: WorkspaceCounts } | { error: string }
+  }
+  /** 작업 공간이 비었는데 데이터가 남은 백업이 있고 그 알림을 아직 닫지 않았으면 그 백업 */
+  'backup:recoveryNotice': { req: void; res: { backup: RecoverableBackup | null } }
+  /** 이 백업의 알림을 다시 띄우지 않는다 (더 새 백업이 생기면 다시 알린다) */
+  'backup:dismissRecoveryNotice': { req: { id: string }; res: void }
+  /** 앱 내부 백업으로 작업 공간 전체를 되돌린다. 성공하면 앱이 곧 다시 시작된다 */
+  'backup:restore': { req: { id: string }; res: { restarting: true } | { error: string } }
   /** 특정 프리셋의 씬 목록 */
   'scenes:list': { req: { presetId: number }; res: { items: Scene[] } }
   'scenes:create': { req: { presetId: number; name: string }; res: { id: number } }
@@ -883,6 +995,14 @@ export interface IpcInvokeMap {
   'vibes:list': { req: void; res: { folders: ListFolder[]; items: VibeItem[] } }
   /** 파일 다이얼로그(다중)로 추가 */
   'vibes:add': { req: { folderId: number | null }; res: { count: number } }
+  /**
+   * 앱 안 이미지 경로(히스토리·라이브러리·씬) 또는 외부 드롭(base64)으로 추가.
+   * failed = 허용되지 않은 경로·읽기 실패·PNG/JPEG/WebP가 아닌 항목 수
+   */
+  'vibes:addFrom': {
+    req: RefAddFromRequest
+    res: { count: number; failed: number }
+  }
   'vibes:update': {
     req: {
       id: number
@@ -898,8 +1018,22 @@ export interface IpcInvokeMap {
   'vibes:folderCollapse': { req: { id: number; collapsed: boolean }; res: void }
   'vibes:folderColor': { req: { id: number; color: string | null }; res: void }
   'vibes:folderDelete': { req: { id: number }; res: void }
+  /** 메타데이터의 바이브를 라이브러리에 넣고 그것만 켠다 (같은 인코딩의 기존 항목은 재사용) */
+  'vibes:importFromMetadata': {
+    req: {
+      vibes: MetadataVibe[]
+      model: string
+      /** 썸네일용 — 메타데이터를 읽은 이미지 */
+      source: { filePath?: string; base64?: string }
+    }
+    res: { ids: number[]; created: number; reused: number }
+  }
   'crefs:list': { req: void; res: { folders: ListFolder[]; items: CharRefItem[] } }
   'crefs:add': { req: { folderId: number | null }; res: { count: number } }
+  'crefs:addFrom': {
+    req: RefAddFromRequest
+    res: { count: number; failed: number }
+  }
   'crefs:update': {
     req: {
       id: number
@@ -983,6 +1117,8 @@ export interface IpcEventMap {
   'window:zoomChanged': { factor: number }
   /** 바이브 인코딩 완료 — 카드의 인코딩 표시 갱신용 */
   'vibes:encoded': Record<string, never>
+  /** 무료 배경 제거(HF Space) 진행 — 연결·대기열·처리, 폴백 Space로 넘어갔는지 */
+  'images:removeBackgroundFreeProgress': FreeBgRemovalProgress
   /** 자동 업데이트 상태 (GitHub release) */
   'update:status': {
     state: 'available' | 'none' | 'downloading' | 'downloaded' | 'error'

@@ -123,6 +123,26 @@ describe('browser runtime regressions', () => {
     expect(download.href).toBe(filePath)
   })
 
+  it('duplicates a prompt preset with all content under a translated name', async () => {
+    state.settings.ui_language = 'zh-CN'
+    const source = {
+      id: 7,
+      name: 'Portrait',
+      prompt: '1girl',
+      negativePrompt: 'lowres',
+      params: { steps: 28 },
+      promptParts: { base: '1girl', additional: 'smile', detail: '' }
+    }
+    state.nextId = 8
+    state.promptPresets = [source, { ...source, id: 3, name: 'Other' }]
+    const { id } = await api.invoke('promptPresets:duplicate', { id: 7 })
+    expect(state.promptPresets.map((preset) => preset.id)).toEqual([7, 3, id])
+    expect(state.promptPresets[2]).toEqual({ ...source, id, name: 'Portrait 副本' })
+    expect(state.promptPresets[2].promptParts).not.toBe(source.promptParts)
+    expect(await api.invoke('promptPresets:duplicate', { id: 999 })).toEqual({ id: 0 })
+    expect(state.promptPresets).toHaveLength(3)
+  })
+
   it('maps stored base64 thumbnails to the URL fields of list responses', async () => {
     const thumb = 'data:image/webp;base64,YQ=='
     state.images = [
@@ -323,4 +343,77 @@ describe('browser runtime regressions', () => {
       expect(state.images[0].sceneId).toBeNull()
     }
   )
+
+  describe('vibes restored from image metadata', () => {
+    const MODEL = 'nai-diffusion-4-5-full'
+    beforeEach(() => {
+      state.settings.ui_language = 'en'
+      state.vibes = [
+        {
+          id: 9,
+          name: 'Metadata vibe 1',
+          thumbnail: 'U09VUkNF',
+          enabled: true,
+          strength: 0.5,
+          infoExtracted: 0.7,
+          encodedReady: true,
+          encodedModels: [MODEL],
+          encodedOnly: true,
+          folderId: null
+        }
+      ] as BrowserState['vibes']
+      state.vibeEncodings = { [`9:${MODEL}:0.7`]: 'RU5DT0RFRA==' }
+    })
+
+    async function runOne(model: string): Promise<{ generated: unknown[]; error?: string }> {
+      const generated: unknown[] = []
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (url: string, init: RequestInit) => {
+          if (url.endsWith('/generate')) {
+            generated.push(JSON.parse(String(init.body)))
+            return Response.json({ base64: 'YQ==', payloadJson: '{}', vibeEncodings: [] })
+          }
+          return Response.json({ anlas: 100, tier: 'opus' })
+        })
+      )
+      await api.invoke('gen:setDelay', { ms: 0 })
+      const { ids } = await api.invoke('queue:enqueue', {
+        request: { ...DEFAULT_REQUEST, model },
+        count: 1
+      })
+      let error: string | undefined
+      await vi.waitFor(async () => {
+        const status = await api.invoke('queue:status', undefined)
+        const item = status.items.find((candidate) => candidate.id === ids[0])
+        expect(['done', 'failed']).toContain(item?.state)
+        error = item?.error
+      })
+      return { generated, error }
+    }
+
+    it('sends the stored encoding instead of the thumbnail', async () => {
+      const { generated, error } = await runOne(MODEL)
+      expect(error).toBeUndefined()
+      expect(generated).toEqual([
+        expect.objectContaining({
+          vibes: [
+            expect.objectContaining({ id: 9, encodedBase64: 'RU5DT0RFRA==', encodedOnly: true })
+          ]
+        })
+      ])
+    })
+
+    it('stops before generating when there is no encoding for the model', async () => {
+      const { generated, error } = await runOne('nai-diffusion-4-5-curated')
+      expect(generated).toEqual([])
+      expect(error).toContain("can't be re-encoded")
+      expect(error).toContain(`${MODEL} (IE 0.7)`)
+    })
+
+    it('keeps Info fixed when updating an encoding-only vibe', async () => {
+      await api.invoke('vibes:update', { id: 9, patch: { infoExtracted: 0.3, strength: 0.9 } })
+      expect(state.vibes[0]).toMatchObject({ infoExtracted: 0.7, strength: 0.9 })
+    })
+  })
 })

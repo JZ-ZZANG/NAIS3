@@ -46,6 +46,19 @@ export function inpaintingModelFor(model: string): string {
   return model.includes('inpainting') ? model : `${model}-inpainting`
 }
 
+/**
+ * inpaintingModelFor의 역 — 인페인트 모델 id → 그 인페인트를 요청한 생성 모델.
+ * 4.5 Curated 인페인트는 V4.5 Curated와 V5 Curated가 같이 쓰므로, 원래 요청한 모델(preferred)이
+ * 그 인페인트 모델로 이어지면 그것을, 아니면 V4.5 Curated를 돌려준다. 인페인트 모델이 아니면 그대로.
+ */
+export function generationModelFor(model: string, preferred?: string): string {
+  if (!model.endsWith('-inpainting')) return model
+  if (preferred && !preferred.endsWith('-inpainting') && inpaintingModelFor(preferred) === model) {
+    return preferred
+  }
+  return model.slice(0, -'-inpainting'.length)
+}
+
 export type GenerationEffort = 'medium' | 'high'
 
 /** Effort 토글이 있는 모델인지 (V5 Full, 어느 effort든) */
@@ -93,7 +106,17 @@ export function effectiveSteps(model: string, steps: number): number {
 
 export interface NaiModelCapabilities {
   vibes: boolean
+  /** Precise Reference (director reference) */
   characterReferences: boolean
+  /** References are sent with inpainting masks */
+  characterReferenceInpainting: boolean
+  /** Outfit references and the "Prefer same outfit" toggle */
+  outfitReferences: boolean
+  /** Fidelity slider (secondary strength); without it fidelity is sent as 1 */
+  characterReferenceFidelity: boolean
+  characterReferenceStrengthMax: number
+  /** canvas: padded 1024×1536 / 1536×1024 / 1472×1472; bucket: cover-crop to ~1 MP buckets */
+  characterReferenceImages: 'canvas' | 'bucket'
   variety: boolean
   noiseScheduleSelection: boolean
   transparency: boolean
@@ -104,7 +127,12 @@ export function modelCapabilities(model: string): NaiModelCapabilities {
   if (isV5Model(model)) {
     return {
       vibes: false,
-      characterReferences: false,
+      characterReferences: true,
+      characterReferenceInpainting: false,
+      outfitReferences: true,
+      characterReferenceFidelity: false,
+      characterReferenceStrengthMax: 5,
+      characterReferenceImages: 'bucket',
       variety: false,
       noiseScheduleSelection: false,
       transparency: true,
@@ -114,6 +142,11 @@ export function modelCapabilities(model: string): NaiModelCapabilities {
   return {
     vibes: true,
     characterReferences: true,
+    characterReferenceInpainting: true,
+    outfitReferences: false,
+    characterReferenceFidelity: true,
+    characterReferenceStrengthMax: 1,
+    characterReferenceImages: 'canvas',
     variety: true,
     noiseScheduleSelection: true,
     transparency: false,

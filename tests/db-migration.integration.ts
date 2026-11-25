@@ -1,6 +1,14 @@
 import Database from 'better-sqlite3'
 import { spawn } from 'child_process'
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'fs'
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync
+} from 'fs'
 import { createRequire } from 'module'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -25,6 +33,8 @@ let legacy: Database.Database | undefined
 const migration18 = migrations[17]
 const path = (): string => join(environment.directory, 'nais3.db')
 const backupPath = (): string => join(environment.directory, 'backups', 'pre-migration-v17.db')
+const upgradeCopyDir = (): string => join(environment.directory, 'upgrade-backups', 'schema-v17')
+const upgradeCopyPath = (): string => join(upgradeCopyDir(), 'nais3.db')
 type Rows = Record<string, Record<string, unknown>[]>
 
 function snapshot(database: Database.Database): Rows {
@@ -145,7 +155,13 @@ describe('existing workspace migration', () => {
       old.prepare('INSERT INTO scene_character_additions (scene_id) VALUES (1)').run()
       old.pragma('foreign_keys = OFF')
       old.prepare('UPDATE character_prompts SET folder_id = 999 WHERE id = 1').run()
-      if (entry === 'shared migration') migrate(old, join(environment.directory, 'backups'))
+      if (entry === 'shared migration') {
+        migrate(
+          old,
+          join(environment.directory, 'backups'),
+          join(environment.directory, 'upgrade-backups')
+        )
+      }
       old.close()
       expect(initDb().version).toBe(migrations.length)
       expect(
@@ -165,6 +181,7 @@ describe('existing workspace migration', () => {
     const old = seedLegacy({ language: 'en' })
     const before = snapshot(old)
     old.close()
+    const original = readFileSync(path())
     const initialized = initDb()
     expect(initialized.isNewDatabase).toBe(false)
     expect(initialized.version).toBe(migrations.length)
@@ -184,6 +201,13 @@ describe('existing workspace migration', () => {
       expect(backup.pragma('integrity_check', { simple: true })).toBe('ok')
       expect(snapshot(backup)).toEqual(before)
     })
+    // The original file is copied byte for byte, outside the pruned snapshot folder.
+    expect(readdirSync(upgradeCopyDir())).toEqual(['nais3.db'])
+    expect(readFileSync(upgradeCopyPath()).equals(original)).toBe(true)
+    withBackup((copy) => {
+      expect(copy.pragma('user_version', { simple: true })).toBe(17)
+      expect(snapshot(copy)).toEqual(before)
+    }, upgradeCopyPath())
     getDb().prepare("DELETE FROM fragments WHERE name = 'Eye color'").run()
     const edited = snapshot(getDb())
     closeDb()
@@ -191,7 +215,7 @@ describe('existing workspace migration', () => {
     expect(snapshot(getDb())).toEqual(edited)
   })
 
-  it('includes committed WAL pages in both migration and periodic snapshots', () => {
+  it('includes committed WAL pages in the original copy, migration and periodic snapshots', () => {
     const old = seedLegacy()
     old.pragma('wal_checkpoint(TRUNCATE)')
     old
@@ -199,8 +223,13 @@ describe('existing workspace migration', () => {
       .run('wal_only', 'committed WAL data')
     expect(statSync(`${path()}-wal`).size).toBeGreaterThan(0)
     const before = snapshot(old)
+    const original = readFileSync(path())
+    const originalWal = readFileSync(`${path()}-wal`)
     initDb()
     withBackup((backup) => expect(snapshot(backup)).toEqual(before))
+    expect(readFileSync(upgradeCopyPath()).equals(original)).toBe(true)
+    expect(readFileSync(`${upgradeCopyPath()}-wal`).equals(originalWal)).toBe(true)
+    withBackup((copy) => expect(snapshot(copy)).toEqual(before), upgradeCopyPath())
     getDb().prepare('UPDATE settings SET value = ? WHERE key = ?').run('newer WAL data', 'wal_only')
     const current = snapshot(getDb())
     withBackup((backup) => expect(snapshot(backup)).toEqual(current), backupNow())
@@ -218,6 +247,7 @@ describe('existing workspace migration', () => {
     expect(getDb().pragma('user_version', { simple: true })).toBe(17)
     expect(snapshot(getDb())).toEqual(before)
     withBackup((backup) => expect(snapshot(backup)).toEqual(before))
+    const firstCopy = readFileSync(upgradeCopyPath())
 
     migrations[17] = migration18
     getDb().prepare('UPDATE fragments SET content = ? WHERE id = 1').run('saved before retry')
@@ -226,6 +256,9 @@ describe('existing workspace migration', () => {
     expect(initDb().version).toBe(migrations.length)
     withBackup((backup) => expect(snapshot(backup)).toEqual(retrySnapshot))
     expect(readdirSync(join(environment.directory, 'backups'))).toEqual(['pre-migration-v17.db'])
+    // A retry at the same version keeps the first original instead of copying again.
+    expect(readFileSync(upgradeCopyPath()).equals(firstCopy)).toBe(true)
+    withBackup((copy) => expect(snapshot(copy)).toEqual(before), upgradeCopyPath())
   })
 
   it('removes snapshot temp files left behind by an interrupted launch', () => {
@@ -248,8 +281,24 @@ describe('existing workspace migration', () => {
     const stale = 'pre-migration-v18.db.00000000-0000-0000-0000-000000000000.tmp'
     writeFileSync(join(backups, stale), 'partial snapshot')
     writeFileSync(join(backups, `${stale}-journal`), 'journal of the partial snapshot')
+    writeFileSync(`${upgradeCopyPath()}.00000000-0000-0000-0000-000000000000.tmp`, 'partial copy')
     expect(initDb().version).toBe(migrations.length)
     expect(readdirSync(backups)).toEqual(['pre-migration-v17.db'])
+    expect(readdirSync(upgradeCopyDir())).toEqual(['nais3.db'])
+  })
+
+  it('completes an original copy that an interrupted launch left unfinished', () => {
+    const old = seedLegacy()
+    const before = snapshot(old)
+    old.close()
+    const original = readFileSync(path())
+    mkdirSync(upgradeCopyDir(), { recursive: true })
+    writeFileSync(`${upgradeCopyPath()}.00000000-0000-0000-0000-000000000000.tmp`, 'partial copy')
+    writeFileSync(`${upgradeCopyPath()}-wal`, 'WAL of an earlier attempt')
+    expect(initDb().version).toBe(migrations.length)
+    expect(readdirSync(upgradeCopyDir())).toEqual(['nais3.db'])
+    expect(readFileSync(upgradeCopyPath()).equals(original)).toBe(true)
+    withBackup((copy) => expect(snapshot(copy)).toEqual(before), upgradeCopyPath())
   })
 
   it('refuses a database from a newer app version without backing it up', () => {
@@ -259,6 +308,7 @@ describe('existing workspace migration', () => {
     expect(() => initDb()).toThrow(`DB version ${migrations.length + 1} is newer than app supports`)
     expect(getDb().pragma('user_version', { simple: true })).toBe(migrations.length + 1)
     expect(readdirSync(environment.directory)).not.toContain('backups')
+    expect(readdirSync(environment.directory)).not.toContain('upgrade-backups')
   })
 
   it('does not re-run a migration that another launch applied while this one waited', async () => {
@@ -307,6 +357,19 @@ describe('existing workspace migration', () => {
     expect(() => initDb()).toThrow()
     expect(getDb().pragma('user_version', { simple: true })).toBe(17)
     expect(snapshot(getDb())).toEqual(before)
+  })
+
+  it('does not migrate if the original files cannot be copied', () => {
+    const old = seedLegacy()
+    const before = snapshot(old)
+    old.close()
+    mkdirSync(join(environment.directory, 'upgrade-backups'))
+    writeFileSync(upgradeCopyDir(), 'blocked directory')
+    expect(() => initDb()).toThrow()
+    expect(getDb().pragma('user_version', { simple: true })).toBe(17)
+    expect(snapshot(getDb())).toEqual(before)
+    // The copy comes first, so a failed copy also leaves no snapshot behind.
+    expect(readdirSync(environment.directory)).not.toContain('backups')
   })
 
   it('cleans incomplete snapshots and stops before migration when publication fails', () => {
